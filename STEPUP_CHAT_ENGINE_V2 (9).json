@@ -1,0 +1,3001 @@
+{
+  "name": "STEPUP_CHAT_ENGINE_V2",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -3360,
+        22576
+      ],
+      "id": "22c52a56-d79f-48f7-b360-ab9e8bf2c465",
+      "name": "Receive From Gateway"
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = $json.body || $json || {};\nconst payload = root.raw_payload || root.data || root.payload || root;\nconst key = payload.key || root.key || payload.message?.key || {};\nconst msgObj = payload.message || root.message || payload.messages?.[0]?.message || root.messages?.[0]?.message || {};\n\nfunction firstString(...values) {\n  for (const value of values) {\n    if (value === null || value === undefined) continue;\n    if (typeof value === 'string' || typeof value === 'number') {\n      const text = String(value).trim();\n      if (text) return text;\n    }\n  }\n  return '';\n}\n\nfunction dig(obj, path) {\n  return path.split('.').reduce((acc, part) => acc && acc[part] !== undefined ? acc[part] : undefined, obj);\n}\n\nlet chatId = firstString(\n  root.chat_id, root.chatId, root.chat,\n  payload.chat_id, payload.chatId, payload.chat,\n  key.remoteJid, payload.remoteJid, payload.from, root.from,\n  dig(payload, 'sender.id'), dig(root, 'sender.id')\n);\n\nlet senderId = firstString(\n  root.sender_id, root.senderId, root.sender,\n  payload.sender_id, payload.senderId, payload.sender,\n  key.participant, payload.participant,\n  root.participant,\n  chatId\n);\n\nif (!chatId && senderId) chatId = senderId;\nif (!senderId && chatId) senderId = chatId;\n\nconst messageText = firstString(\n  root.userMessage, root.content, root.body, root.text, root.messageText,\n  payload.userMessage, payload.content, payload.body, payload.text, payload.messageText,\n  msgObj.conversation,\n  dig(msgObj, 'extendedTextMessage.text'),\n  dig(msgObj, 'imageMessage.caption'),\n  dig(msgObj, 'videoMessage.caption'),\n  dig(msgObj, 'documentMessage.caption'),\n  dig(msgObj, 'buttonsResponseMessage.selectedDisplayText'),\n  dig(msgObj, 'listResponseMessage.title'),\n  dig(msgObj, 'templateButtonReplyMessage.selectedDisplayText')\n);\n\nlet normalizedTimestamp = new Date().toISOString();\nconst rawTimestamp = firstString(\n  root.timestamp, payload.timestamp, payload.ts, payload.created_at, payload.messageTimestamp, root.messageTimestamp\n);\nif (rawTimestamp) {\n  const asNumber = Number(rawTimestamp);\n  const parsed = Number.isFinite(asNumber)\n    ? new Date(asNumber < 1000000000000 ? asNumber * 1000 : asNumber)\n    : new Date(rawTimestamp);\n  if (!Number.isNaN(parsed.getTime())) normalizedTimestamp = parsed.toISOString();\n}\n\nconst isGroupChat = String(chatId).includes('@g.us');\nconst chatType = isGroupChat ? 'group' : 'private';\nconst rawWhatsapp = firstString(\n  root.whatsapp_number, root.whatsappNumber,\n  payload.whatsapp_number, payload.whatsappNumber,\n  isGroupChat ? senderId : chatId,\n  senderId,\n  chatId\n);\n\nfunction normalizeIdentity(value) {\n  const raw = String(value || '')\n    .replace(/@c\\.us$/i, '')\n    .replace(/@s\\.whatsapp\\.net$/i, '')\n    .replace(/@lid(\\.whatsapp\\.net)?$/i, '')\n    .replace(/@g\\.us$/i, '')\n    .trim();\n  const digits = raw.replace(/\\D/g, '');\n  if (digits) return digits;\n  return raw.replace(/[^a-z0-9_\\-]/gi, '').slice(0, 64);\n}\n\nlet whatsappNumber = normalizeIdentity(rawWhatsapp);\nif (!whatsappNumber) whatsappNumber = normalizeIdentity(senderId || chatId) || `unknown_${Date.now()}`;\nif (!chatId) chatId = `${whatsappNumber}@s.whatsapp.net`;\nif (!senderId) senderId = chatId;\n\nconst STEPUP_CLIENT_ID = 'd4c5656e-836f-4abf-87ff-6cc7d3de5c1c';\nconst clientId = firstString(root.client_id, root.clientId, payload.client_id, payload.clientId) || STEPUP_CLIENT_ID;\nconst sessionName = firstString(root.session_name, root.session, payload.session_name, payload.session, payload.instance, payload.account, root.instance) || 'Tab';\n\nreturn {\n  chat_id: chatId,\n  sender_id: senderId,\n  userMessage: messageText,\n  timestamp: normalizedTimestamp,\n  chat_type: chatType,\n  whatsapp_number: whatsappNumber,\n  client_id: clientId,\n  session_name: sessionName,\n  incoming_is_valid: !!(chatId && whatsappNumber && messageText)\n};"
+      },
+      "id": "be53b2a5-cdc1-4714-8455-f655fe3cc588",
+      "name": "Normalize Incoming Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        22576
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check-private",
+              "leftValue": "={{ $json.chat_type }}",
+              "rightValue": "private",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "355ca409-916a-4392-b2bf-49312f6fc9fb",
+              "leftValue": "={{ $json.incoming_is_valid }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4df2b816-5078-4719-82c1-9ce1aeb2e777",
+      "name": "Filter Private Chat Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2464,
+        22576
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "leads",
+        "limit": 1,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "whatsapp_number",
+              "condition": "eq",
+              "keyValue": "={{ $json.whatsapp_number }}"
+            },
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "5cca668e-741e-44c6-8e11-951b9bb03c1d",
+      "name": "Find Existing Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        352,
+        22560
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $('Normalize Incoming Message').first().json;\nconst leadRow = ($input.first() && $input.first().json) ? $input.first().json : {};\nconst hasLead = !!leadRow.id;\nconst currentState = String(leadRow.current_state || 'IDLE').toUpperCase();\nconst lastChatRaw = leadRow.last_message_at || leadRow.last_chat_date || null;\nlet daysSinceLastChat = 0;\nif (lastChatRaw) {\n  const diff = Date.now() - new Date(lastChatRaw).getTime();\n  if (!Number.isNaN(diff) && diff > 0) daysSinceLastChat = Math.floor(diff / 86400000);\n}\nconst staleProcessingSeconds = 180;\nlet processingAgeSeconds = 0;\nif (lastChatRaw) {\n  const diffMs = Date.now() - new Date(lastChatRaw).getTime();\n  if (!Number.isNaN(diffMs) && diffMs > 0) processingAgeSeconds = Math.floor(diffMs / 1000);\n}\nconst isProcessing = currentState === 'PROCESSING';\nconst isProcessingExpired = isProcessing && processingAgeSeconds >= staleProcessingSeconds;\nconst effectiveProcessing = isProcessing && !isProcessingExpired;\nreturn { json: { ...msg, lead_id: hasLead ? leadRow.id : null, current_state: currentState, is_new_lead: !hasLead, is_rechat: hasLead && daysSinceLastChat > 90, is_processing: effectiveProcessing, is_processing_expired: isProcessingExpired, processing_age_seconds: processingAgeSeconds, daysSinceLastChat, previous_last_message_at: lastChatRaw } };"
+      },
+      "id": "6ce2d541-0e2e-4866-8a2d-69954060ef40",
+      "name": "Check Lead State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        22560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "not-processing",
+              "leftValue": "={{ $json.is_processing }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "da854210-56b4-4b92-bca1-04b88fb0b808",
+      "name": "Guard: Drop If PROCESSING",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -3312,
+        23408
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "state-awaiting",
+                    "leftValue": "={{ $json.current_state }}",
+                    "rightValue": "AWAITING_FORM",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "is-new",
+                    "leftValue": "={{ $json.is_new_lead }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "is-rechat",
+                    "leftValue": "={{ $json.is_rechat }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "8d492e53-bc4a-473f-8e40-06b79756fc26",
+      "name": "Route By State",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -2816,
+        23360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $json;\nconst formText = String(msg.userMessage || '').trim();\nfunction extractField(text) {\n  const labels = Array.prototype.slice.call(arguments, 1);\n  for (const label of labels) {\n    const pattern = '(?:^|\\\\n)\\\\s*[*_-]*\\\\s*' + label + '\\\\s*[:\\\\-*]?\\\\s*([^\\\\n\\\\r]+)';\n    const regex = new RegExp(pattern, 'i');\n    const match = text.match(regex);\n    if (match && match[1] && match[1].trim()) return match[1].trim();\n  }\n  return '';\n}\nconst nama = extractField(formText, 'Nama', 'Nama Lengkap');\nconst domisili = extractField(formText, 'Domisili', 'Kota', 'Lokasi');\nconst bb = extractField(formText, 'BB', 'Berat Badan', 'Berat');\nconst tb = extractField(formText, 'TB', 'Tinggi Badan', 'Tinggi');\nconst goals = extractField(formText, 'Goals', 'Goal', 'Tujuan', 'Goals / Tujuan Fitness');\nconst alasan = extractField(formText, 'Alasan Join', 'Alasan', 'Reason', 'Alasan Ingin Join');\nconst isValid = !!(nama && domisili && goals && alasan);\nconst reminderText = 'Siap Kak, aku bantu proses pendaftarannya ya!\\nSebelum mulai, mohon isi data berikut terlebih dahulu agar kami bisa mengenal kebutuhan dan target latihan Kakak dengan lebih baik Ã°Å¸ËœÅ \\n\\nNama: \\nDomisili: \\nBerat Badan: \\nTinggi Badan: \\nGoals: \\nAlasan Join: ';\nreturn { json: { whatsapp_number: msg.whatsapp_number, chat_id: msg.chat_id, timestamp: msg.timestamp || new Date().toISOString(), client_id: msg.client_id || 'd4c5656e-836f-4abf-87ff-6cc7d3de5c1c', session_name: msg.session_name || 'Tab', lead_id: msg.lead_id, nama, domisili, bb, tb, goals, alasan, isValid, rawForm: formText, reminderText } };"
+      },
+      "id": "6f3f9d0a-67b9-4661-9eb6-1c43a4d79f81",
+      "name": "Parse Join Form Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1872,
+        22832
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "join_requests",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "client_id",
+              "fieldValue": "={{ $json.client_id }}"
+            },
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{ $json.lead_id }}"
+            },
+            {
+              "fieldId": "whatsapp_number",
+              "fieldValue": "={{ $json.whatsapp_number }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "submitted"
+            },
+            {
+              "fieldId": "current_step",
+              "fieldValue": "form_received"
+            },
+            {
+              "fieldId": "submitted_data",
+              "fieldValue": "={{ JSON.stringify({ nama: $json.nama, domisili: $json.domisili, bb: $json.bb, tb: $json.tb, goals: $json.goals, alasan_join: $json.alasan }) }}"
+            },
+            {
+              "fieldId": "started_at",
+              "fieldValue": "={{ $json.timestamp }}"
+            }
+          ]
+        }
+      },
+      "id": "4c9aac6b-990a-4824-8c2e-c74909d5346f",
+      "name": "Insert Join Request",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -96,
+        23056
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "whatsapp_number",
+              "condition": "eq",
+              "keyValue": "={{ $('Wait Before Admin Join Lead').item.json.whatsapp_number }}"
+            },
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Wait Before Admin Join Lead').item.json.client_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "join"
+            },
+            {
+              "fieldId": "current_state",
+              "fieldValue": "IDLE"
+            },
+            {
+              "fieldId": "last_message_at",
+              "fieldValue": "={{ $json.timestamp }}"
+            }
+          ]
+        }
+      },
+      "id": "ca203e48-2c97-475a-a3f1-9c0c10b417e1",
+      "name": "Update Lead Status Join",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1696,
+        23056
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (function(){\n  const d = typeof $json.submitted_data === 'string'\n    ? JSON.parse($json.submitted_data)\n    : $json.submitted_data;\n\n  return {\n    chatId: '120363426515888049@g.us',\n    text:\n      '✨ *NEW LEAD MEMBER* ✨\\n\\n' +\n      '📋 *Data Calon Member*\\n\\n' +\n      '👤 Nama : ' + String(d.nama || '-') + '\\n' +\n      '📱 No. WA : ' + String($json.whatsapp_number || '-') + '\\n' +\n      '📍 Domisili : ' + String(d.domisili || '-') + '\\n' +\n      '⚖️ Berat Badan : ' + String(d.bb || '-') + ' kg\\n' +\n      '📏 Tinggi Badan : ' + String(d.tb || '-') + ' cm\\n' +\n      '🎯 Goals : ' + String(d.goals || '-') + '\\n' +\n      '💬 Alasan Join : ' + String(d.alasan_join || '-') + '\\n\\n' +\n      '━━━━━━━━━━━━━━\\n' +\n      '🚨 *Mohon segera dilakukan follow-up.*\\n' +\n      '⚡ Respon cepat = peluang closing lebih tinggi 💪',\n    session: $json.session_name || 'Tab'\n  };\n})() }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "0f62c3ab-133e-4032-85d3-b5aa176bf12d",
+      "name": "Notify Group Join Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        864,
+        23056
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1jVe9YgWeLfRnP28JAquR4V4RxLAXLYboL-q7D7p0T1M",
+          "mode": "list",
+          "cachedResultName": "Lead STEP UP"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 817071678,
+          "mode": "list",
+          "cachedResultName": "JOIN"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "no_wa": "=+{{ $json.whatsapp_number }}",
+            "nama": "={{ JSON.parse($json.submitted_data).nama || '' }}",
+            "domisili": "={{ JSON.parse($json.submitted_data).domisili || '' }}",
+            "bb": "={{ (() => { const d = JSON.parse($json.submitted_data); return d.bb ? d.bb + ' Kg' : ''; })() }}",
+            "tb": "={{ (() => { const d = JSON.parse($json.submitted_data); return d.tb ? d.tb + ' CM' : ''; })() }}",
+            "goals": "={{ JSON.parse($json.submitted_data).goals || '' }}",
+            "alasan_join": "={{ JSON.parse($json.submitted_data).alasan_join || '' }}",
+            "tanggal_daftar": "={{ new Date($json.timestamp).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta' }) }}",
+            "jam_daftar": "={{ new Date($json.timestamp).toLocaleTimeString('id-ID', {  timeZone: 'Asia/Jakarta',  hour: '2-digit',  minute: '2-digit'}) + ' WIB' }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "no",
+              "displayName": "no",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "no_wa",
+              "displayName": "no_wa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "nama",
+              "displayName": "nama",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "domisili",
+              "displayName": "domisili",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "bb",
+              "displayName": "bb",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "tb",
+              "displayName": "tb",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "goals",
+              "displayName": "goals",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "alasan_join",
+              "displayName": "alasan_join",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "tanggal_daftar",
+              "displayName": "tanggal_daftar",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "jam_daftar",
+              "displayName": "jam_daftar",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "8712ed09-ff1d-465e-9983-5e323cfad334",
+      "name": "Sheet Save Join",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -592,
+        22816
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OSBvzfYyt2kEPnOO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "client_id",
+              "fieldValue": "={{ $json.client_id }}"
+            },
+            {
+              "fieldId": "whatsapp_number",
+              "fieldValue": "={{ $json.whatsapp_number }}"
+            },
+            {
+              "fieldId": "chat_id",
+              "fieldValue": "={{ $json.chat_id }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "lead"
+            },
+            {
+              "fieldId": "current_state",
+              "fieldValue": "IDLE"
+            },
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{ $json.timestamp }}"
+            },
+            {
+              "fieldId": "last_message_at",
+              "fieldValue": "={{ $json.timestamp }}"
+            }
+          ]
+        }
+      },
+      "id": "19d96a1f-c324-41dc-bb09-603d86c6cac5",
+      "name": "Create Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -2496,
+        23664
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({\n  chatId: '120363426515888049@g.us',\n  text:\n    '🔔 *NEW MEMBER INQUIRY*\\n\\n' +\n    '📱 No. WA : ' + String($json.whatsapp_number || '-') + '\\n' +\n    '💬 Pesan : ' + String($json.userMessage || '-') + '\\n' +\n    '🕒 Waktu : ' + String($json.timestamp || '-'),\n  session: $json.session_name || 'default'\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "b664ceff-fc15-49c6-a721-6528d8fe56c7",
+      "name": "Notify Admin New Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1648,
+        22960
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1jVe9YgWeLfRnP28JAquR4V4RxLAXLYboL-q7D7p0T1M",
+          "mode": "list",
+          "cachedResultName": "Lead STEP UP"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "NEW"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "no_wa": "={{ $json.whatsapp_number }}",
+            "pesan": "={{ $json.userMessage }}",
+            "tanggal": "={{ new Date($json.timestamp).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta' }) }}",
+            "waktu": "={{ new Date($json.timestamp).toLocaleTimeString('id-ID', {\n  timeZone: 'Asia/Jakarta',\n  hour: '2-digit',\n  minute: '2-digit'\n}) + ' WIB' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "no",
+              "displayName": "no",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "no_wa",
+              "displayName": "no_wa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "pesan",
+              "displayName": "pesan",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "tanggal",
+              "displayName": "tanggal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "waktu",
+              "displayName": "waktu",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "2666969b-ca0e-46aa-ad59-debf409df327",
+      "name": "Sheet Save New Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -1648,
+        23168
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OSBvzfYyt2kEPnOO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({\n  chatId: '120363426515888049@g.us',\n  text:\n    '♻️ *RE-ENGAGEMENT LEAD*\\n\\n' +\n    '👤 No. WA : ' + String($json.whatsapp_number || '-') + '\\n' +\n    '💬 Pesan : ' + String($json.userMessage || '-') + '\\n' +\n    '⏳ Tidak aktif : ' + String($json.daysSinceLastChat || 0) + ' hari lalu\\n' +\n    '🕒 Waktu : ' + String($json.timestamp || '-') + '\\n\\n' +\n    '📌 Lead kembali menghubungi setelah periode tidak aktif.',\n  session: $json.session_name || 'default'\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "bd567c34-fc3c-46ed-b563-a452dff0a99d",
+      "name": "Notify Admin Rechat 90d",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1376,
+        23296
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1jVe9YgWeLfRnP28JAquR4V4RxLAXLYboL-q7D7p0T1M",
+          "mode": "list",
+          "cachedResultName": "Lead STEP UP"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1384951280,
+          "mode": "list",
+          "cachedResultName": "RE-CHAT"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "no_wa": "=+{{ $json.whatsapp_number }}",
+            "pesan": "={{ $json.userMessage }}",
+            "tanggal": "={{ new Date($json.timestamp).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta' }) }}",
+            "waktu": "={{ new Date($json.timestamp).toLocaleTimeString('id-ID', {  timeZone: 'Asia/Jakarta',  hour: '2-digit',  minute: '2-digit'}) + ' WIB' }}",
+            "terakhir_chat_tanggal": "={{ $('Check Lead State').first().json.previous_last_message_at  ? new Date($('Check Lead State').first().json.previous_last_message_at).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta' })  : '' }}",
+            "terakhir_chat_waktu": "=={{ $('Check Lead State').first().json.previous_last_message_at  ? new Date($('Check Lead State').first().json.previous_last_message_at).toLocaleTimeString('id-ID', {      timeZone: 'Asia/Jakarta',      hour: '2-digit',      minute: '2-digit'    }) + ' WIB'  : '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "no",
+              "displayName": "no",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "no_wa",
+              "displayName": "no_wa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "pesan",
+              "displayName": "pesan",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "tanggal",
+              "displayName": "tanggal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "waktu",
+              "displayName": "waktu",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "terakhir_chat_tanggal",
+              "displayName": "terakhir_chat_tanggal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "terakhir_chat_waktu",
+              "displayName": "terakhir_chat_waktu",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "4afa60ee-4fb1-4365-9e66-b37016e2afd1",
+      "name": "Sheet Save Rechat",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -1376,
+        23488
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OSBvzfYyt2kEPnOO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "whatsapp_number",
+              "condition": "eq",
+              "keyValue": "={{ $(\"Normalize Incoming Message\").first().json.whatsapp_number }}"
+            },
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $(\"Normalize Incoming Message\").first().json.client_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "current_state",
+              "fieldValue": "PROCESSING"
+            },
+            {
+              "fieldId": "chat_id",
+              "fieldValue": "={{ $(\"Normalize Incoming Message\").first().json.chat_id }}"
+            },
+            {
+              "fieldId": "last_message_at",
+              "fieldValue": "={{ $(\"Normalize Incoming Message\").first().json.timestamp }}"
+            }
+          ]
+        }
+      },
+      "id": "fe2a9eb5-a844-4492-b6ba-a31f5123e471",
+      "name": "Lock Session: Set PROCESSING",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -2160,
+        23664
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "chat_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "chat_id",
+              "fieldValue": "={{ $('Normalize Incoming Message').first().json.chat_id }}"
+            },
+            {
+              "fieldId": "role",
+              "fieldValue": "user"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Normalize Incoming Message').first().json.userMessage }}"
+            },
+            {
+              "fieldId": "client_id",
+              "fieldValue": "={{ $('Normalize Incoming Message').first().json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "ce9fc415-8da5-4576-845d-359174f8a352",
+      "name": "Insert User Message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -1824,
+        23664
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/typing",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({ chatId: $json.chat_id || $('Normalize Incoming Message').first().json.chat_id, status: 'composing', session: $json.session_name || $('Normalize Incoming Message').first().json.session_name || 'Tab' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "2c1e20b4-6f48-45b5-bc07-3200ba5d7e91",
+      "name": "Send Typing Indicator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1376,
+        23664
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "chat_history",
+        "limit": 500,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chat_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.chat_id }}"
+            },
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "ed502e7c-5d9e-4a1f-8fb4-f0f619ec6fbe",
+      "name": "Fetch Chat History",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -1072,
+        23664
+      ],
+      "alwaysOutputData": true,
+      "settings": {
+        "continueOnFail": true
+      },
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const incomingItems = $input.all();\nconst historyRows = incomingItems\n  .map(item => item.json)\n  .filter(row => row && !row.error && (row.content || row.created_at || row.timestamp || row.role));\n\nif (historyRows.length === 0) {\n  return { json: { formatted_history: [] } };\n}\n\nconst sorted = historyRows.sort((a, b) => {\n  const ta = new Date(a.created_at || a.timestamp || 0).getTime();\n  const tb = new Date(b.created_at || b.timestamp || 0).getTime();\n  return ta - tb;\n});\n\nconst formattedHistory = sorted\n  .slice(-20)\n  .map(msg => ({\n    role: msg.role === \"assistant\" ? \"assistant\" : \"user\",\n    content: String(msg.content || \"\")\n  }))\n  .filter(msg => msg.content.trim() !== \"\");\n\nreturn {\n  json: {\n    formatted_history: formattedHistory\n  }\n};\n"
+      },
+      "id": "33195be0-372d-4ddf-9dbb-f54307cf5a15",
+      "name": "Format History",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3104,
+        23952
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ref_harga",
+        "limit": 500,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "5d353a18-3b53-4e0b-b43f-9496d1eb7eff",
+      "name": "Fetch Sheet Harga",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -2736,
+        23952
+      ],
+      "alwaysOutputData": true,
+      "settings": {
+        "continueOnFail": true
+      },
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ref_jadwal",
+        "limit": 500,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "e6c26336-b1b1-4771-99ae-963fbfd9624a",
+      "name": "Fetch Sheet Jadwal",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -2320,
+        23952
+      ],
+      "alwaysOutputData": true,
+      "settings": {
+        "continueOnFail": true
+      },
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ref_coach",
+        "limit": 500,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "63da358e-7db4-4641-a63c-3b9d79c66abe",
+      "name": "Fetch Sheet Coach",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -1904,
+        23952
+      ],
+      "alwaysOutputData": true,
+      "settings": {
+        "continueOnFail": true
+      },
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ref_event",
+        "limit": 500,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "ea6c8de7-f9f5-438c-b383-75bc3d29ded2",
+      "name": "Fetch Sheet Event",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -1536,
+        23952
+      ],
+      "alwaysOutputData": true,
+      "settings": {
+        "continueOnFail": true
+      },
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ref_promo",
+        "limit": 500,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "1ab5d5f9-5c6c-4861-acb6-a6013a1a1456",
+      "name": "Fetch Sheet Promo",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -1168,
+        23952
+      ],
+      "alwaysOutputData": true,
+      "settings": {
+        "continueOnFail": true
+      },
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "knowledge_intents",
+        "limit": 500
+      },
+      "id": "bcef55e2-5ce4-42e0-bed6-904a2cfdc0b9",
+      "name": "Fetch Knowledge Base",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -480,
+        23952
+      ],
+      "alwaysOutputData": true,
+      "settings": {
+        "continueOnFail": true
+      },
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawUserMsg = String($('Normalize Incoming Message').first().json.userMessage || '');\nconst userMsg = rawUserMsg.toLowerCase();\n\n// ─── Intent Detection ──────────────────────────────────────────────────────\nconst intents = {\n  price: /harga|biaya|bayar|berapa|paket|membership|member|promo|diskon|trial|pricelist|price list|list harga|tarif|cicil|worth|sebanding|investasi|murah|mahal|kemahalan/.test(userMsg),\n\n  class: /kelas|jadwal|program|class|olahraga|latihan|yoga|strength|pilates|fitdance|boxing|trampoline|aerobic|body combat|power step|cardio|hiit|tabata|abs|core|toning/.test(userMsg),\n\n  coach: /coach|pelatih|trainer|instruktur|pengajar|guru|komunitas|support|siapa yang ngajar|siapa coachnya/.test(userMsg),\n\n  location: /lokasi|alamat|dimana|di mana|maps|google map|parkir|fasilitas|tempat|kepanjen|malang|akses|rute|jalan/.test(userMsg),\n\n  challenge: /21 hari|21 days|challenge|meal plan|nutrisi|diet|meal replacement|program diet|program 21/.test(userMsg),\n\n  goals: /target|goals|turun|naik|berat|langsing|fit|sehat|percaya diri|gemuk|kurus|ideal|diet|bentuk badan|perut|pinggang|obesitas|badan|tubuh|transformasi|program turun/.test(userMsg),\n\n  registration: /daftar|daftarnya|join|gabung|pendaftaran|booking|form|formulir|isi form|cara daftar|gimana daftar|bagaimana daftar|bisa daftar|daftar di sini|daftar disini|minta form|mau coba|pengen coba|cobain dulu|trial gratis|coba dulu/.test(userMsg),\n\n  admin: /admin|nomor admin|kontak admin|wa admin|whatsapp admin|cs admin|hubungi admin|contact|nomornya|nomor wa/.test(userMsg),\n\n  social: /instagram|ig\\b|sosmed|sosial media|social media|portfolio|portofolio|gambaran|keseruan|transformasi|foto|ulasan|testimoni|before after|sebelum sesudah|hasilnya|bukti|review/.test(userMsg),\n\n  objection: /mahal|kemahalan|mahal banget|mahal amat|kok mahal|terlalu mahal|harga tinggi|harga mahal|bisa lebih murah|ada yang lebih murah|kurang terjangkau|worth it|worth ga|sebanding ga|sepadan/.test(userMsg),\n\n  about: /stepup itu|tentang stepup|apa itu stepup|cerita dong|ceritain|gimana stepup|profil|sejarah|gym perempuan|gym wanita|ladies gym|khusus wanita|khusus perempuan|bedanya sama gym lain|bedanya apa dengan/.test(userMsg),\n\n  event: /event|acara|lomba|kompetisi|special event|open class|free class|kelas gratis|kelas special/.test(userMsg),\n};\n\n// ─── Category Mapping ──────────────────────────────────────────────────────\nconst categoryMap = {\n  price:        ['harga_pembayaran'],\n  class:        ['kelas_program'],\n  coach:        ['coach_community'],\n  location:     ['lokasi_fasilitas'],\n  challenge:    ['challenge_21_days', 'harga_pembayaran'],\n  goals:        ['goals_transformasi', 'target_member'],\n  registration: ['pendaftaran'],\n  admin:        ['admin'],\n  social:       ['tentang_stepup'],\n  objection:    ['harga_pembayaran', 'tentang_stepup'],\n  about:        ['tentang_stepup', 'faq_umum'],\n  event:        ['tentang_stepup', 'faq_umum'],\n};\n\nconst defaultCategories = new Set(['tentang_stepup', 'faq_umum']);\nconst preferredCategories = new Set(defaultCategories);\nfor (const [intent, active] of Object.entries(intents)) {\n  if (active && categoryMap[intent]) categoryMap[intent].forEach(c => preferredCategories.add(c));\n}\n\n// ─── Score KB Rows ─────────────────────────────────────────────────────────\nconst allKb = $('Fetch Knowledge Base').all()\n  .map(d => d.json)\n  .filter(row => row && (row.description || row.content || row.category || row.intent_name));\n\nconst stopWords = new Set(['yang','dan','ini','itu','bisa','mau','ada','untuk','dengan','apa','kak','ya','ga','gak','tidak','mau','kak','kak']);\n\nconst keywordParts = [...new Set(\n  userMsg\n    .replace(/[^a-z0-9\\s]/gi, ' ')\n    .split(/\\s+/)\n    .map(s => s.trim())\n    .filter(s => s.length >= 3 && !stopWords.has(s))\n)];\n\nfunction scoreRow(row) {\n  const cat = String(row.category || '').toLowerCase();\n  const intent = String(row.intent_name || '').toLowerCase();\n  const text = [row.intent_name, row.description, row.content, row.title, row.category]\n    .map(v => String(v || '').toLowerCase())\n    .join(' ');\n\n  let score = 0;\n  if (preferredCategories.has(cat)) score += 8;\n  if (defaultCategories.has(cat)) score += 2;\n\n  for (const kw of keywordParts) {\n    if (intent.includes(kw)) score += 6;\n    if (cat.includes(kw)) score += 4;\n    if (text.includes(kw)) score += 2;\n  }\n\n  if (intents.admin     && cat === 'admin')                                           score += 20;\n  if (intents.location  && cat === 'lokasi_fasilitas')                                score += 20;\n  if (intents.about     && cat === 'tentang_stepup')                                  score += 18;\n  if (intents.price     && cat === 'harga_pembayaran')                                score += 15;\n  if (intents.objection && cat === 'harga_pembayaran')                                score += 15;\n  if (intents.registration && cat === 'pendaftaran')                                  score += 15;\n  if (intents.challenge && cat === 'challenge_21_days')                               score += 15;\n  if (intents.coach     && cat === 'coach_community')                                 score += 15;\n  if (intents.social    && cat === 'tentang_stepup')                                  score += 15;\n  if (intents.objection && cat === 'tentang_stepup')                                  score += 10;\n  if (intents.about     && cat === 'faq_umum')                                        score += 10;\n  if (intents.goals     && (cat === 'goals_transformasi' || cat === 'target_member')) score += 12;\n  if (intents.class     && cat === 'kelas_program')                                   score += 12;\n\n  return score;\n}\n\nconst scoredKb = allKb\n  .map(row => ({ row, score: scoreRow(row) }))\n  .filter(entry => entry.score > 0)\n  .sort((a, b) => b.score - a.score || Number(a.row.id || 0) - Number(b.row.id || 0));\n\nconst fallbackKb = allKb\n  .filter(row => defaultCategories.has(String(row.category || '').toLowerCase()))\n  .slice(0, 8)\n  .map(row => ({ row, score: 1 }));\n\nconst maxKb = (intents.admin || intents.about) ? 20 : 16;\nconst finalKb = (scoredKb.length ? scoredKb : fallbackKb)\n  .slice(0, maxKb)\n  .map(entry => entry.row);\n\nconst kbItems = finalKb.map(row => ({ json: { ...row, _source: 'kb' } }));\n\n// ─── Sheet Data ────────────────────────────────────────────────────────────\nconst sheetItems = [];\n\n// Filter jadwal by hari jika disebutkan\nconst dayList = ['senin','selasa','rabu','kamis','jumat',\"jum'at\",'sabtu','minggu'];\nconst mentionedDay = dayList.find(d => userMsg.includes(d)) || null;\n\n// Harga & Promo\nif (intents.price || intents.challenge || intents.objection || intents.registration) {\n  const hargaRows = $('Fetch Sheet Harga').all().map(d => d.json).filter(r => {\n    if (!r || !r.nama_paket) return false;\n    const s = String(r.status || '').toLowerCase();\n    return !s || s === 'aktif' || s === 'active';\n  });\n  for (const row of hargaRows) {\n    sheetItems.push({\n      json: {\n        _source: 'sheet_harga',\n        category: 'harga_pembayaran',\n        content: [\n          `Nama Paket: ${row.nama_paket}`,\n          row.kategori        ? `Kategori: ${row.kategori}` : '',\n          row.harga           ? `Harga: ${row.harga}` : '',\n          row.durasi          ? `Durasi: ${row.durasi}` : '',\n          row.fasilitas_utama ? `Fasilitas: ${row.fasilitas_utama}` : '',\n          row.ketentuan       ? `Ketentuan: ${row.ketentuan}` : '',\n          row.cocok_untuk     ? `Cocok Untuk: ${row.cocok_untuk}` : '',\n        ].filter(Boolean).join(' | '),\n      }\n    });\n  }\n\n  const promoRows = $('Fetch Sheet Promo').all().map(d => d.json).filter(r =>\n    r && r.nama_promo && String(r.status || '').toLowerCase() === 'active'\n  );\n  for (const row of promoRows) {\n    sheetItems.push({\n      json: {\n        _source: 'sheet_promo',\n        category: 'harga_pembayaran',\n        content: [\n          `Promo: ${row.nama_promo}`,\n          row.diskon ? `Diskon: ${row.diskon}` : '',\n          row.harga  ? `Harga Promo: ${row.harga}` : '',\n          row.syarat ? `Syarat: ${row.syarat}` : '',\n        ].filter(Boolean).join(' | '),\n      }\n    });\n  }\n}\n\n// Jadwal (filter by hari jika ada)\nif (intents.class) {\n  let rows = $('Fetch Sheet Jadwal').all().map(d => d.json).filter(r => r && (r.nama_kelas || r.kelas));\n  if (mentionedDay) {\n    const filtered = rows.filter(r => String(r.hari || '').toLowerCase().includes(mentionedDay));\n    if (filtered.length > 0) rows = filtered;\n  }\n  for (const row of rows) {\n    sheetItems.push({\n      json: {\n        _source: 'sheet_jadwal',\n        category: 'kelas_program',\n        content: [\n          `Kelas: ${row.nama_kelas || row.kelas || ''}`,\n          row.hari  ? `Hari: ${row.hari}` : '',\n          row.jam   ? `Jam: ${row.jam}` : '',\n          row.coach ? `Coach: ${row.coach}` : '',\n        ].filter(Boolean).join(' | ')\n      }\n    });\n  }\n}\n\n// Coach\nif (intents.coach) {\n  const rows = $('Fetch Sheet Coach').all().map(d => d.json).filter(r => r && r.nama_coach);\n  for (const row of rows) {\n    sheetItems.push({\n      json: {\n        _source: 'sheet_coach',\n        category: 'coach_community',\n        content: [\n          `Coach: ${row.nama_coach}`,\n          row.specialist    ? `Specialist: ${row.specialist}` : '',\n          row.hari_mengajar ? `Mengajar: ${row.hari_mengajar}` : '',\n          row.bio           ? `Bio: ${row.bio}` : '',\n        ].filter(Boolean).join(' | ')\n      }\n    });\n  }\n}\n\n// Event & Challenge\nif (intents.challenge || intents.event || intents.goals) {\n  const rows = $('Fetch Sheet Event').all().map(d => d.json).filter(r => {\n    if (!r) return false;\n    const s = String(r.status || '').toLowerCase();\n    return !s || s === 'aktif' || s === 'active';\n  });\n  for (const row of rows) {\n    sheetItems.push({\n      json: {\n        _source: 'sheet_event',\n        category: 'challenge_21_days',\n        content: [\n          (row.nama_event || row.nama_program) ? `Event: ${row.nama_event || row.nama_program}` : '',\n          row.deskripsi ? `Deskripsi: ${row.deskripsi}` : '',\n          row.harga     ? `Harga: ${row.harga}` : '',\n          row.durasi    ? `Durasi: ${row.durasi}` : '',\n          row.fasilitas ? `Fasilitas: ${row.fasilitas}` : '',\n        ].filter(Boolean).join(' | ')\n      }\n    });\n  }\n}\n\nreturn [...sheetItems, ...kbItems];"
+      },
+      "id": "91fdb6cc-157c-4cec-9590-58ceb93d86eb",
+      "name": "Filter KB By Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3104,
+        24192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeGet(nodeName) {\n  try {\n    return $(nodeName).all().map(d => d.json).filter(row => row && !row.error && Object.keys(row).length > 0);\n  } catch (e) { return []; }\n}\n\nconst rawUserMsg = String($('Normalize Incoming Message').first().json.userMessage || '');\nconst userMsg = rawUserMsg.toLowerCase();\n\nconst nowJkt = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));\nconst dayNames = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];\nconst currentDayName = dayNames[nowJkt.getDay()];\nconst currentHour = nowJkt.getHours();\nconst currentTimeStr = nowJkt.toTimeString().slice(0,5) + ' WIB';\nconst greetingTime = currentHour < 11 ? 'pagi' : currentHour < 15 ? 'siang' : currentHour < 18 ? 'sore' : 'malam';\n\nconst resolvedUserMsg = userMsg\n  .replace(/\\bhari ini\\b/g, currentDayName.toLowerCase())\n  .replace(/\\bsekarang\\b(?=.*jadwal)/g, currentDayName.toLowerCase());\n\nconst mentionsToday = /hari ini|sekarang|today/.test(userMsg);\n\nfunction isActive(row) {\n  const s = String(row.status || row.Status || '').toLowerCase();\n  return !s || s === 'aktif' || s === 'active';\n}\n\n// Dipindah ke atas karena dipakai di scoreHargaRow\nfunction rupiahNumber(v) { const n = Number(String(v||'').replace(/\\D/g,'')); return isFinite(n) && n > 0 ? n : null; }\nfunction rupiahFormat(n) { return 'Rp' + Number(n).toLocaleString('id-ID'); }\n\nconst allHarga    = safeGet('Fetch Sheet Harga').filter(isActive);\nconst allJadwal   = safeGet('Fetch Sheet Jadwal').filter(isActive);\nconst allCoachRaw = safeGet('Fetch Sheet Coach').filter(isActive);\n\n// ─── Intent Flags (synced dengan Filter KB By Intent) ─────────────────────\nconst isPureGreeting = /^(halo|hallo|hello|hi|hey|pagi|siang|sore|malam|assalamualaikum|wa'alaikum|waalaikum|selamat pagi|selamat siang|selamat sore|selamat malam|hai|hei|hoi|oi|assalam|waalaikumsalam|السلام|permisi|excuse me)[\\s!.,]*$/i.test(rawUserMsg.trim());\nconst hasGreetingPrefix = /^(halo|hallo|hello|hi|hey|hai|hei|selamat pagi|selamat siang|selamat sore|selamat malam|assalamualaikum|permisi)[\\s,!.]*/i.test(rawUserMsg.trim());\nconst wantsFullList    = /semua|lengkap|full|list|daftar lengkap|jadwal lengkap|paket lengkap|pricelist|price list|list harga/.test(userMsg);\n\nconst asksLocation    = /alamat|lokasi|dimana|di mana|maps|google map|tempatnya|parkir|akses|rute|jalan ke/.test(userMsg);\nconst asksAdmin       = /admin|nomor admin|kontak admin|wa admin|whatsapp admin|cs admin|hubungi admin|contact|nomornya|nomor wa|wa-nya/.test(userMsg);\nconst asksSocialMedia = /instagram|ig\\b|sosmed|sosial media|social media|portfolio|portofolio|gambaran|keseruan|transformasi|foto|ulasan|testimoni|before after|sebelum sesudah|hasilnya|bukti|review/.test(userMsg);\n\nconst hasNumericPriceMention = /(\\d+\\s*(k|rb|ribu|jt|juta)\\b|\\b\\d{4,9}\\b)/.test(userMsg);\nconst asksPrice    = /harga|biaya|berapa|paket|member|membership|promo|diskon|trial|free|pricelist|price list|list harga|tarif|cicil|worth|sepadan|sebanding/.test(userMsg) || hasNumericPriceMention;\nconst asksObjection = /mahal|kemahalan|mahal banget|mahal amat|kok mahal|terlalu mahal|harga tinggi|harga mahal|bisa lebih murah|ada yang lebih murah|kurang terjangkau|worth it|worth ga|sebanding ga|sepadan/.test(userMsg);\n\nconst asksSchedule = /jadwal|jam|hari|kapan|senin|selasa|rabu|kamis|jumat|jum'at|sabtu|minggu/.test(userMsg);\nconst asksCoach    = /coach|pelatih|trainer|instruktur|pengajar|guru/.test(userMsg);\nconst asksEvent    = /event|acara|challenge|open class|free class|kelas gratis|kelas special|lomba|kompetisi/.test(userMsg);\nconst asksPromo    = /promo|diskon|trial/.test(userMsg);\nconst asksAbout    = /stepup itu|tentang stepup|apa itu stepup|cerita dong|ceritain|gimana stepup|profil|sejarah|gym perempuan|gym wanita|ladies gym|khusus wanita|khusus perempuan|bedanya sama gym lain/.test(userMsg);\n\nconst hasSpecificDay = /senin|selasa|rabu|kamis|jumat|jum'at|sabtu|minggu/.test(resolvedUserMsg) || mentionsToday;\n\nconst jadwalClassNames = [...new Set(allJadwal.map(r => String(r.kelas || '').toLowerCase()).filter(Boolean))];\nconst mentionedClass   = jadwalClassNames.find(cls => userMsg.includes(cls));\nconst asksClass        = !!mentionedClass || /kelas|class/.test(userMsg);\n\n// ─── Rupiah helpers ────────────────────────────────────────────────────────\nfunction normalizeRupiahMentions(text) {\n  return String(text || '')\n    .toLowerCase()\n    .replace(/(\\d+)\\s*jt\\b/g, (_, n) => String(Number(n) * 1000000))\n    .replace(/(\\d+)\\s*juta\\b/g, (_, n) => String(Number(n) * 1000000))\n    .replace(/(\\d+)\\s*rb\\b/g, (_, n) => String(Number(n) * 1000))\n    .replace(/(\\d+)\\s*ribu\\b/g, (_, n) => String(Number(n) * 1000))\n    .replace(/(\\d+)\\s*k\\b/g, (_, n) => String(Number(n) * 1000));\n}\n\nfunction extractMentionedPrices(text) {\n  const normalized = normalizeRupiahMentions(text);\n  return [...new Set((normalized.match(/\\d{4,9}/g) || [])\n    .map(value => Number(value))\n    .filter(value => Number.isFinite(value) && value > 0))];\n}\n\nfunction packageTokens(name) {\n  return String(name || '')\n    .toLowerCase()\n    .split(/[^a-z0-9]+/)\n    .filter(token => token.length >= 4 && !['days', 'challenge', 'program', 'paket', 'class', 'hari', 'fit'].includes(token));\n}\n\nfunction scoreHargaRow(row, msg, mentionedPrices) {\n  const fullName = String(row.nama_paket || '').toLowerCase();\n  if (!fullName) return 0;\n  let score = 0;\n  if (msg.includes(fullName)) score += 100;\n  const rowPrice = rupiahNumber(row.harga);\n  if (rowPrice && mentionedPrices.includes(rowPrice)) score += 80;\n  const tokens = packageTokens(fullName);\n  const matchedTokens = tokens.filter(token => msg.includes(token));\n  score += matchedTokens.length * 10;\n  if (tokens.length > 0 && matchedTokens.length === tokens.length) score += 25;\n  if (/challenge/.test(msg) && /challenge/.test(fullName)) score += 8;\n  if (/private/.test(msg)   && /private/.test(fullName))   score += 8;\n  if (/vip/.test(msg)       && /vip/.test(fullName))       score += 8;\n  if (/reguler/.test(msg)   && /reguler/.test(fullName))   score += 8;\n  return score;\n}\n\n// ─── Match harga rows ──────────────────────────────────────────────────────\nconst mentionedPrices  = extractMentionedPrices(userMsg);\nconst asksDifference   = /apa bedanya|bedanya apa|beda apa|beda nya|perbedaannya|perbedaan|compare|bandingkan|vs\\b|versus/.test(userMsg);\nconst matchedHargaRows = (asksPrice || asksObjection)\n  ? allHarga\n      .map(row => ({ row, score: scoreHargaRow(row, userMsg, mentionedPrices) }))\n      .filter(entry => entry.score > 0)\n      .sort((a, b) => b.score - a.score || (rupiahNumber(a.row.harga) || 0) - (rupiahNumber(b.row.harga) || 0))\n      .map(entry => entry.row)\n  : [];\n\nconst packageNames     = [...new Set(allHarga.map(r => String(r.nama_paket || '').toLowerCase()).filter(Boolean))];\nconst mentionedPackage = matchedHargaRows[0]\n  ? String(matchedHargaRows[0].nama_paket || '').toLowerCase()\n  : (packageNames.find(pkg => userMsg.includes(pkg)) || null);\n\nconst asksClassAndPrice    = (asksClass || !!mentionedClass) && asksPrice;\nconst asksOnlyGeneralPrice = asksPrice && !mentionedPackage && matchedHargaRows.length === 0 && !/(private|vip|challenge|21 hari|bulanan|bulan|harian|perdatang|trial|special|online|pengelolaan|berat badan|turbo|reguler|boxing|yoga|pilates|trampoline|quick start)/.test(userMsg);\n\n// ─── Answer Mode Routing ───────────────────────────────────────────────────\nlet answerMode = 'GENERAL';\nif (asksAdmin)                              answerMode = 'ADMIN_INFO';\nelse if (asksLocation)                      answerMode = 'LOCATION';\nelse if (asksSocialMedia)                   answerMode = 'SOCIAL_MEDIA';\nelse if (asksClassAndPrice)                 answerMode = 'CLASS_AND_PRICE';\nelse if (asksPrice && asksOnlyGeneralPrice) answerMode = 'PRICE_GENERAL_CLARIFY';\nelse if (asksPrice)                         answerMode = 'PRICE_SPECIFIC';\nelse if (asksObjection)                     answerMode = 'PRICE_OBJECTION';\nelse if (asksSchedule && hasSpecificDay)    answerMode = 'SCHEDULE_SPECIFIC_DAY';\nelse if (asksSchedule)                      answerMode = 'SCHEDULE_GENERAL';\nelse if (asksCoach)                         answerMode = 'COACH_INFO';\nelse if (asksClass)                         answerMode = 'CLASS_GENERAL';\nelse if (asksEvent || asksPromo)            answerMode = 'EVENT_PROMO';\nelse if (asksAbout)                         answerMode = 'ABOUT_STEPUP';\n\n// ─── Utility functions ─────────────────────────────────────────────────────\nfunction compactRow(row, keys) {\n  return keys.map(k => row[k] ? `${k}: ${row[k]}` : '').filter(Boolean).join(' | ');\n}\nfunction formatRows(rows, keys) {\n  return rows.filter(isActive).map(r => compactRow(r, keys)).filter(Boolean).join('\\n');\n}\nfunction unique(rows, key) {\n  return [...new Set(rows.map(r => String(r[key] || '').trim()).filter(Boolean))];\n}\n\n// ─── KB processing ─────────────────────────────────────────────────────────\nlet kb = safeGet('Filter KB By Intent').filter(r => !r._source || r._source === 'kb');\n\nif (asksLocation) {\n  const locKb = kb.filter(r => {\n    const intent = String(r.intent_name||'').toLowerCase();\n    const cat    = String(r.category||'').toLowerCase();\n    const txt    = String(r.description||r.content||'').toLowerCase();\n    return cat === 'lokasi_fasilitas' || intent.includes('alamat') || txt.includes('alamat lengkap');\n  });\n  kb = [...locKb, ...kb.filter(r => !locKb.some(l => l.id === r.id))];\n}\n\nif (asksSocialMedia) {\n  const socialRe = /instagram|portfolio|portofolio|gambaran|keseruan|transformasi|sosial|social|ulasan|testimoni/i;\n  const socialKb = kb.filter(r => socialRe.test(String(r.intent_name||'') + ' ' + String(r.description||r.content||'')));\n  kb = [...socialKb, ...kb.filter(r => !socialKb.includes(r))];\n}\n\nkb = kb.slice(0, wantsFullList || asksOnlyGeneralPrice ? 20 : (asksAdmin ? 10 : 8));\n\n// ─── Data fetching ─────────────────────────────────────────────────────────\nconst promo = (asksPromo || asksPrice || asksObjection)\n  ? safeGet('Fetch Sheet Promo').filter(isActive).slice(0, 5) : [];\n\nconst harga = (asksPrice || asksObjection)\n  ? (matchedHargaRows.length > 0 ? matchedHargaRows : allHarga)\n  : [];\n\n// Jadwal dengan filter hari\nlet jadwalToShow   = allJadwal;\nlet filteringDebug = { searched: null, found: null, error: null };\n\nif (hasSpecificDay) {\n  const dayRegex = /senin|selasa|rabu|kamis|jumat|jum'at|sabtu|minggu/i;\n  const dayMatch = (resolvedUserMsg || userMsg).match(dayRegex);\n  if (dayMatch) {\n    const targetDay = dayMatch[0].toLowerCase().replace(/jum'at/i, 'jumat');\n    filteringDebug.searched = targetDay;\n    const filtered = allJadwal.filter(r => String(r.hari || '').trim().toLowerCase() === targetDay);\n    filteringDebug.found = filtered.length;\n    if (filtered.length === 0) {\n      const availableDays = [...new Set(allJadwal.map(r => String(r.hari || '').trim()))];\n      filteringDebug.error = `No schedule for \"${targetDay}\". Available: ${availableDays.join(', ')}`;\n    } else {\n      jadwalToShow = filtered;\n    }\n  }\n}\n\n// Coach dengan filter specialist\nlet coachToShow = allCoachRaw;\nif (asksCoach) {\n  const classKeyword = allCoachRaw\n    .flatMap(c => (c.specialist||'').split(',').map(s => s.trim()))\n    .find(cls => cls && userMsg.includes(cls.toLowerCase()));\n  if (classKeyword) {\n    const filtered = allCoachRaw.filter(c => String(c.specialist||'').toLowerCase().includes(classKeyword.toLowerCase()));\n    if (filtered.length > 0) coachToShow = filtered;\n  }\n}\n\nconst coach = asksCoach ? coachToShow : [];\nconst event = (asksEvent || asksPromo) ? safeGet('Fetch Sheet Event').filter(isActive).slice(0, 5) : [];\n\n// Enrich jadwal dengan specialist coach\nconst coachMap = {};\nallCoachRaw.forEach(c => {\n  const name = String(c.nama_coach || '').trim().toLowerCase();\n  if (name) coachMap[name] = c;\n});\n\nconst jadwalJoined = jadwalToShow.map(j => {\n  const coachName = String(j.coach || '').trim();\n  const coachData = coachMap[coachName.toLowerCase()];\n  if (coachData && coachData.specialist) {\n    return { ...j, coach: `${coachName} [${coachData.specialist}]` };\n  }\n  return j;\n});\n\nconst jadwal = (asksSchedule || asksClass) ? jadwalJoined.slice(0, wantsFullList ? 50 : 30) : [];\n\n// ─── Summary data ──────────────────────────────────────────────────────────\nconst classNames      = unique(allJadwal, 'kelas');\nconst priceCategories = unique(allHarga, 'kategori');\nconst numericPrices   = allHarga.map(r => rupiahNumber(r.harga)).filter(Boolean);\nconst minPrice        = numericPrices.length ? Math.min(...numericPrices) : null;\nconst maxPrice        = numericPrices.length ? Math.max(...numericPrices) : null;\nconst priceRangeText  = minPrice && maxPrice ? `${rupiahFormat(minPrice)} sampai ${rupiahFormat(maxPrice)}` : '';\n\nconst locationText = asksLocation\n  ? kb.map(r => r.description||r.content||'').find(t => /alamat lengkap|Jl\\.|Kepanjen|Malang/i.test(t)) || '' : '';\nconst adminText    = asksAdmin\n  ? kb.map(r => r.description||r.content||'').find(t => /admin\\s*1|088|085|082|081/i.test(t)) || '' : '';\nconst socialText   = asksSocialMedia\n  ? kb.map(r => r.description||r.content||'').find(t => /instagram\\.com|portofolio|portfolio/i.test(t)) || '' : '';\nconst kbText       = kb.map(r => r.description||r.content||'').filter(Boolean).join('\\n');\n\n// ─── Build dataContext ─────────────────────────────────────────────────────\nconst parts = [];\nparts.push(`=== WAKTU SEKARANG ===\\nHari: ${currentDayName}\\nJam: ${currentTimeStr}\\nSapaan: selamat ${greetingTime}`);\n\nif (classNames.length)      parts.push(`=== RINGKASAN NAMA KELAS ===\\n${classNames.join(', ')}`);\nif (priceCategories.length) parts.push(`=== KATEGORI HARGA TERSEDIA ===\\n${priceCategories.join(', ')}`);\nif (locationText)           parts.push(`=== ALAMAT STEPUP ===\\n${locationText}`);\nif (adminText)              parts.push(`=== KONTAK ADMIN ===\\n${adminText}`);\nif (socialText)             parts.push(`=== INSTAGRAM & PORTFOLIO ===\\n${socialText}`);\nif (kbText)                 parts.push(`=== KNOWLEDGE BASE ===\\n${kbText}`);\nif (promo.length)  parts.push(`=== PROMO AKTIF ===\\n${formatRows(promo,  ['nama_promo','deskripsi_promo','harga','benefit','periode'])}`);\nif (harga.length)  parts.push(`=== HARGA & PAKET ===\\n${formatRows(harga, ['nama_paket','kategori','harga','durasi','fasilitas_utama','ketentuan','cocok_untuk'])}`);\nif (jadwal.length) parts.push(`=== JADWAL/KELAS ===\\n${formatRows(jadwal, ['hari','jam','kelas','coach'])}`);\nif (coach.length)  parts.push(`=== DATA COACH ===\\n${formatRows(coach,  ['nama_coach','specialist','hari_mengajar'])}`);\nif (event.length)  parts.push(`=== EVENT ===\\n${formatRows(event,  ['nama_event','deskripsi','tanggal','harga','lokasi'])}`);\n\n// PRICE_OBJECTION: paksa sertakan harga meski user tidak sebut nama paket\nif (answerMode === 'PRICE_OBJECTION' && allHarga.length > 0) {\n  const hasHargaBlock = parts.some(p => p.includes('=== HARGA & PAKET ==='));\n  if (!hasHargaBlock) {\n    const objLines = allHarga.map(r =>\n      `• ${r.nama_paket}: ${r.harga ? rupiahFormat(rupiahNumber(r.harga)) : '-'} (${r.durasi || '-'})`\n    ).join('\\n');\n    parts.push(`=== HARGA & PAKET ===\\n${objLines}`);\n  }\n}\n\nconst msg = $('Normalize Incoming Message').first().json;\n\nreturn { json: {\n  dataContext: parts.join('\\n\\n') || 'Tidak ada data referensi.',\n  answerMode: isPureGreeting ? 'GREETING' : answerMode,\n  locationText, priceRangeText, adminText, socialText, hasSpecificDay,\n  asksOnlyGeneralPrice, asksClassAndPrice,\n  isPureGreeting, hasGreetingPrefix, currentDayName, greetingTime,\n  chat_id: msg.chat_id, whatsapp_number: msg.whatsapp_number,\n  client_id: msg.client_id, session_name: msg.session_name,\n  timestamp: msg.timestamp, userMessage: rawUserMsg,\n  resolvedUserMessage: isPureGreeting ? rawUserMsg : resolvedUserMsg,\n  filteringDebug,\n  jadwalFilteredCount: jadwal.length,\n  coachCount: coach.length,\n  answerModeDetermined: answerMode\n}};"
+      },
+      "id": "1ee6f80f-e4a6-430e-af2f-d9796e131a6d",
+      "name": "Collect Reference Data (Sequential)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2656,
+        24192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const assembled = $('Assemble Answer Facts').first().json || {};\nconst refData = $('Collect Reference Data (Sequential)').first().json || {};\nconst formattedHistory = $('Format History').first().json.formatted_history || [];\nconst _rawIncoming = $('Normalize Incoming Message').first().json || {};\n\nconst answerFacts = assembled.answer_facts || {};\nconst primaryFactType = String(assembled.primary_fact_type || 'general');\nconst primaryFactPayload = assembled.primary_fact_payload || null;\nconst fallbackFactPayload = assembled.fallback_fact_payload || {};\n\nconst userMessage =\n  answerFacts.userMessage ||\n  refData.resolvedUserMessage ||\n  _rawIncoming.userMessage ||\n  '';\n\nconst answerMode = answerFacts.answerMode || refData.answerMode || 'GENERAL';\nconst locationText = answerFacts.locationText || refData.locationText || '';\nconst priceRangeText = answerFacts.priceRangeText || refData.priceRangeText || '';\nconst socialText = answerFacts.socialText || refData.socialText || '';\nconst adminText = answerFacts.adminText || refData.adminText || '';\nconst classDetail = answerFacts.class_detail || null;\nconst classDetailFound = !!answerFacts.class_detail_found;\n\nconst rawUserText = String(userMessage || '').trim();\n\nconst hasGreetingPrefix =\n  !!refData.hasGreetingPrefix ||\n  /^(halo|hallo|hello|hi|hey|hai|hei|assalamualaikum|permisi|selamat pagi|selamat siang|selamat sore|selamat malam|pagi|siang|sore|malam)[\\s,!.]*/i.test(rawUserText);\n\nconst forbidDecorativeOutput = ['SOCIAL_MEDIA', 'WEIGHT_EXPECTATION'].includes(answerMode);\n\nfunction detectUserGreetingStyle(text) {\n  if (/assalamualaikum/i.test(text)) return 'waalaikumsalam kak';\n  if (/selamat pagi/i.test(text)) return 'selamat pagi kak';\n  if (/selamat siang/i.test(text)) return 'selamat siang kak';\n  if (/selamat sore/i.test(text)) return 'selamat sore kak';\n  if (/selamat malam/i.test(text)) return 'selamat malam kak';\n  if (/\\bpagi\\b/i.test(text)) return 'pagi kak';\n  if (/\\bsiang\\b/i.test(text)) return 'siang kak';\n  if (/\\bsore\\b/i.test(text)) return 'sore kak';\n  if (/\\bmalam\\b/i.test(text)) return 'malam kak';\n  if (/halo|hallo|hello|hi|hey|hai|hei/i.test(text)) return 'hai kak';\n  return '';\n}\n\nconst preferredGreeting = detectUserGreetingStyle(rawUserText);\n\nfunction pushPart(parts, title, value) {\n  const text = String(value || '').trim();\n  if (!text) return;\n  parts.push(`=== ${title} ===\\n${text}`);\n}\n\nconst contextParts = [];\n\npushPart(\n  contextParts,\n  'WAKTU SEKARANG',\n  `Hari: ${refData.currentDayName || '-'}\\nSapaan: ${refData.greetingTime ? 'selamat ' + refData.greetingTime : '-'}`\n);\n\nif (primaryFactType === 'class_detail' && classDetailFound && classDetail) {\n  const classLines = [\n    classDetail.nama_olahraga ? `Nama Olahraga: ${classDetail.nama_olahraga}` : '',\n    classDetail.alias ? `Alias: ${classDetail.alias}` : '',\n    classDetail.deskripsi_singkat ? `Deskripsi Singkat: ${classDetail.deskripsi_singkat}` : '',\n    classDetail.manfaat ? `Manfaat: ${classDetail.manfaat}` : '',\n    classDetail.cocok_untuk ? `Cocok Untuk: ${classDetail.cocok_untuk}` : '',\n    classDetail.level ? `Level: ${classDetail.level}` : '',\n    classDetail.fokus_latihan ? `Fokus Latihan: ${classDetail.fokus_latihan}` : '',\n    classDetail.status ? `Status: ${classDetail.status}` : ''\n  ].filter(Boolean).join('\\n');\n\n  pushPart(contextParts, 'DETAIL OLAHRAGA TERPILIH', classLines);\n}\n\nif (primaryFactType === 'location' && locationText) {\n  pushPart(contextParts, 'ALAMAT STEPUP', locationText);\n}\n\nif (primaryFactType === 'admin' && adminText) {\n  pushPart(contextParts, 'KONTAK ADMIN', adminText);\n}\n\nif (primaryFactType === 'social_media' && socialText) {\n  pushPart(contextParts, 'INSTAGRAM & PORTFOLIO', socialText);\n}\n\nif (primaryFactType === 'price' && priceRangeText) {\n  pushPart(contextParts, 'RENTANG HARGA', priceRangeText);\n}\n\nif (primaryFactType !== 'class_detail' && refData.dataContext) {\n  const trimmedBaseContext = String(refData.dataContext || '').trim();\n  if (trimmedBaseContext) {\n    pushPart(contextParts, 'DATA REFERENSI TAMBAHAN', trimmedBaseContext);\n  }\n}\n\nif (primaryFactType === 'class_detail' && refData.dataContext) {\n  const minimalFallback = [\n    fallbackFactPayload.locationText ? `Alamat: ${fallbackFactPayload.locationText}` : '',\n    fallbackFactPayload.adminText ? `Kontak admin: ${fallbackFactPayload.adminText}` : '',\n    fallbackFactPayload.socialText ? `Instagram: ${fallbackFactPayload.socialText}` : ''\n  ].filter(Boolean).join('\\n');\n  if (minimalFallback) {\n    pushPart(contextParts, 'REFERENSI PELENGKAP', minimalFallback);\n  }\n}\n\nconst dataContext = contextParts.join('\\n\\n').trim() || 'Tidak ada data referensi.';\n\nconst systemPrompt = `Kamu CS WhatsApp StepUp Ladies Gym.\n\nSUMBER KEBENARAN SATU-SATUNYA HANYA DATA DI BAWAH INI. JANGAN PAKAI PENGETAHUAN UMUM, JANGAN NEBAK, JANGAN MENGARANG.\nKalau info yang diminta user tidak tertulis jelas di data, jawab jujur singkat bahwa datanya belum ada atau belum disebut.\nKalau user menanyakan hal di luar konteks StepUp atau di luar data, arahkan balik dengan sopan tanpa menambah fakta baru.\n\n${dataContext}\n\nAturan utama:\n- Output hanya isi pesan WhatsApp final plain text.\n- Jangan sebut database, sistem, AI, prompt, mode, atau proses internal.\n- Jangan pakai markdown.\n- Jangan ulang pertanyaan user mentah-mentah.\n- Jangan menambah nama kelas, harga, coach, promo, jadwal, alamat, nomor admin, fasilitas, link, atau akun yang tidak tertulis di data.\n- StepUp TIDAK punya kelas Zumba. Jangan pernah menulis Zumba.\n- Jika data tidak cukup, bilang singkat dan jujur.\n- Prioritaskan data sheet/ref yang spesifik daripada kalimat promosi umum.\n- Jika ada detail harga, jadwal, alamat, nomor admin, atau link sosial di data, salin inti faktanya dengan akurat.\n\nGaya bicara:\n- Natural, sopan, hangat, dan terasa seperti admin WA manusia.\n- Jangan kaku, jangan terlalu formal, jangan seperti brosur.\n- Boleh pakai kalimat seperti \"Malam kak\", \"Ada nih kak\", \"Boleh kak\", \"Yang available sekarang...\", \"Kalau buat...\" secukupnya.\n- Hindari pembuka yang datar seperti \"Berikut beberapa pilihan paket yang tersedia\" kalau bisa dibuat lebih natural.\n\nAturan greeting yang sangat penting:\n- Jika user menyapa, pakai MAKSIMAL SATU sapaan di awal balasan.\n- Jangan pernah membuat sapaan ganda seperti \"Siang kak, selamat siang\", \"Pagi kak, selamat pagi\", atau \"Hai kak, selamat siang\".\n- Jika user sudah menyebut waktu seperti \"selamat pagi/siang/sore/malam\", balas dengan SATU bentuk saja yang paling natural, jangan diulang dalam bentuk lain.\n- Jika user hanya bilang \"halo/hai/hi\", boleh balas dengan satu sapaan singkat saja.\n- Jika user tidak menyapa, jangan tambahkan greeting atau salam di awal.\n\nPreferensi sapaan untuk pesan ini:\n- Ada sapaan di awal user: ${hasGreetingPrefix ? 'ya' : 'tidak'}\n- Bentuk sapaan yang paling aman jika memang perlu dipakai: ${preferredGreeting || '(tidak perlu sapaan tambahan)'}\n\nPrioritas fakta untuk pesan ini:\n- Tipe fakta utama: ${primaryFactType}\n- Jika ada detail olahraga terpilih, utamakan itu dan jangan tenggelamkan dengan daftar data lain yang tidak relevan.\n- Jika mode LOCATION, fokus ke alamat.\n- Jika mode ADMIN_INFO, fokus ke nomor admin.\n- Jika mode SOCIAL_MEDIA, fokus ke link sosial.\n- Jika mode harga, fokus ke data harga yang relevan.\n- Jika data utama tidak ada, baru gunakan referensi pelengkap seperlunya.\n\nMode aktif: ${answerMode}\n- GREETING: balas sapaan hangat sesuai konteks, 1-2 kalimat. Gunakan hanya satu sapaan.\n- LOCATION: jawab alamat langsung dari data alamat yang ada.\n- ADMIN_INFO: jika user tanya nomor admin atau kontak admin, jawab langsung semua nomor admin yang ada di data dengan rapi.\n- SOCIAL_MEDIA: jawab langsung dengan link Instagram dari data INSTAGRAM & PORTFOLIO persis apa adanya. Jangan tulis URL lain. Jangan bilang datanya belum ada jika link Instagram sudah tersedia di data.\n- WEIGHT_EXPECTATION: jika user bertanya soal estimasi turun/naik berat badan, kg per minggu, kg per bulan, atau kapan target ideal tercapai, jawab bahwa hasil tiap individu berbeda-beda dan tidak bisa ditetapkan secara pasti.\n- PRICE_GENERAL_CLARIFY: jika user tanya harga secara umum, tampilkan semua paket aktif dari data HARGA & PAKET tanpa dipotong, bukan cuma rentang harga dan bukan cuma sebagian paket. Sertakan nama paket, harga, dan durasi. Jika ada fasilitas_utama boleh tambahkan singkat. Tutup dengan penjelasan singkat bahwa fasilitas dan ketentuan berlaku menyesuaikan paket yang dipilih.\n- PRICE_SPECIFIC: jawab hanya paket atau harga yang memang relevan dari data.\n- CLASS_GENERAL: tampilkan semua nama kelas yang memang ada pada data.\n- CLASS_AND_PRICE: gabungkan kelas yang tersedia dengan info harga yang benar dari data.\n- SCHEDULE_SPECIFIC_DAY: tampilkan jadwal untuk hari yang diminta saja.\n- COACH_INFO: jawab info coach dari data yang ada.\n- EVENT_PROMO: jawab promo, event, atau challenge hanya dari data yang tersedia.\n- GENERAL: jawab singkat dan tetap berdasarkan data yang ada.\n\nAturan wajib:\n0. Jika user membuka dengan sapaan lalu lanjut bertanya, balas dengan satu sapaan singkat saja lalu langsung jawab inti pertanyaannya.\n1. Jika user tidak menyapa, jangan tambahkan greeting atau salam di awal.\n2. Plain text WA saja.\n3. CLASS_GENERAL wajib lengkap sesuai data yang tersedia.\n4. PRICE_GENERAL_CLARIFY wajib tampilkan semua paket aktif jika data harga tersedia, walaupun user tidak menulis kata pricelist.\n5. ADMIN_INFO wajib tampilkan nomor admin dari data jika ada.\n6. Jika draft berisi daftar harga atau pricelist, jangan dipotong, jangan diringkas, dan tampilkan semua item yang ada.\n7. Jangan pakai CTA robot seperti \"silakan tanya\", \"kami siap membantu\".\n8. [INTENT:JOIN] hanya kalau user eksplisit mau daftar atau booking sekarang.\n9. Kalau data tidak ada, bilang jujur dan singkat.\n10. Jangan keluar dari konteks data.\n11. Untuk SOCIAL_MEDIA, wajib tampilkan link Instagram persis dari data, jangan disingkat atau diubah.\n12. Untuk WEIGHT_EXPECTATION, jangan memberi angka pasti kg per minggu, kg per bulan, atau estimasi waktu pasti.\n13. Untuk SOCIAL_MEDIA dan WEIGHT_EXPECTATION, jangan pakai emoji, simbol dekoratif, markdown, atau icon apapun.\n14. Jika mode SOCIAL_MEDIA aktif dan link Instagram tersedia di data, prioritaskan jawab langsung link tersebut secara singkat.\n15. Jika mode WEIGHT_EXPECTATION aktif, jangan alihkan jawaban ke harga paket, promo, atau jadwal kecuali user memang menanyakannya juga.\n16. Jika user menulis \"selamat pagi/siang/sore/malam\", JANGAN ubah menjadi dua sapaan. Pilih satu saja.\n17. Dilarang menggabungkan dua bentuk sapaan dalam satu pembuka.`;\n\nconst messages = [\n  { role: 'system', content: systemPrompt },\n  ...formattedHistory,\n  { role: 'user', content: userMessage }\n];\n\nconst llmPrompt = messages\n  .map((msg) => `${String(msg.role || 'user').toUpperCase()}: ${String(msg.content || '').trim()}`)\n  .filter(Boolean)\n  .join('\\n\\n');\n\nreturn {\n  json: {\n    messages,\n    llmPrompt,\n    dataContext,\n    answerMode,\n    locationText,\n    priceRangeText,\n    socialText,\n    adminText,\n    hasGreetingPrefix,\n    preferredGreeting,\n    forbidDecorativeOutput,\n    primaryFactType,\n    primaryFactPayload,\n    classDetailFound,\n    classDetail,\n    hasSpecificDay: answerFacts.hasSpecificDay ?? refData.hasSpecificDay,\n    asksOnlyGeneralPrice: answerFacts.asksOnlyGeneralPrice ?? refData.asksOnlyGeneralPrice,\n    asksClassAndPrice: answerFacts.asksClassAndPrice ?? refData.asksClassAndPrice,\n    chat_id: _rawIncoming.chat_id,\n    whatsapp_number: _rawIncoming.whatsapp_number,\n    client_id: _rawIncoming.client_id,\n    session_name: _rawIncoming.session_name,\n    timestamp: _rawIncoming.timestamp,\n    userMessage,\n    lead_id: $('Check Lead State').first().json.lead_id\n  }\n};"
+      },
+      "id": "8bc2a1e4-6c33-45ed-bda3-1063b58317c4",
+      "name": "Build Human WhatsApp Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        24192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nconst ctx = $('Build Human WhatsApp Context').first().json;\nconst answerMode = String(ctx.answerMode || 'GENERAL');\n\nfunction getFallbackByMode(mode) {\n  const adminRedirect = 'bisa langsung tanya ke admin ya kak 😊';\n  if (mode === 'PRICE_GENERAL_CLARIFY' || mode === 'PRICE_SPECIFIC' || mode === 'PRICE_OBJECTION') {\n    return 'Untuk info harga dan paket lengkapnya ' + adminRedirect;\n  }\n  if (mode === 'SCHEDULE_SPECIFIC_DAY' || mode === 'SCHEDULE_GENERAL') {\n    return 'Untuk jadwal terbaru ' + adminRedirect;\n  }\n  if (mode === 'COACH_INFO') {\n    return 'Info coach lengkapnya ' + adminRedirect;\n  }\n  if (mode === 'EVENT_PROMO') {\n    return 'Untuk info promo dan event terbaru ' + adminRedirect;\n  }\n  if (mode === 'LOCATION') {\n    return 'Untuk info lokasi lengkapnya ' + adminRedirect;\n  }\n  if (mode === 'ADMIN_INFO') {\n    return 'Untuk kontak admin ' + adminRedirect;\n  }\n  return 'Boleh kak, cerita kebutuhannya gimana? Biar kami bantu arahkan yang paling cocok 😊';\n}\n\nconst fallbackReply = getFallbackByMode(answerMode);\n\nconst rawReply = String(\n  item.output?.[0]?.content?.[0]?.text ||\n  item.text ||\n  item.message?.content ||\n  item.response?.text ||\n  item.draftReply ||\n  ''\n).trim();\n\nfunction humanClean(text) {\n  let out = String(text || '')\n    .replace(/\\[INTENT:JOIN\\]/g, ' [INTENT:JOIN] ')\n    .replace(/^#{1,6}\\s*/gm, '')\n    .replace(/\\*\\*(.*?)\\*\\*/g, '*$1*')\n    .replace(/__(.*?)__/g, '$1')\n    .replace(/[ \\t]+$/gm, '')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  const bannedCta = /kami\\s+siap\\s+membantu\\s*[!.]*\\s*$|beritahu\\s+kami\\s+ya\\s*[!.]*\\s*$|jangan\\s+ragu\\s+untuk\\s+(tanya|menghubungi)|feel\\s+free\\s+to/i;\n  out = out\n    .split('\\n')\n    .map(line => line.trim())\n    .filter(line => line && !bannedCta.test(line))\n    .join('\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  return out;\n}\n\nfunction classifyJoinIntent(userText, modelText) {\n  const msg = String(userText || '').toLowerCase().trim();\n  const modelMarkedJoin = String(modelText || '').includes('[INTENT:JOIN]');\n\n  const registrationPhrases = /(cara daftar|gimana daftar|bagaimana daftar|daftarnya gimana|daftarnya bagaimana|bisa daftar|daftar di sini|daftar disini|langsung daftar|minta form|minta formulir|kirim form|kirim formulir|isi form|isi formulir|mau daftar|ingin daftar|pengen daftar|mau join|ingin join|pengen join|booking sekarang)/i;\n  const asksInfo = /(apa saja|apa aja|harga|berapa|biaya|promo|free trial|trial|kelas|program|jadwal|jam|hari|kapan|lokasi|alamat|dimana|fasilitas|coach|special class)/i.test(msg) && !registrationPhrases.test(msg);\n\n  const explicitJoinOnly =\n    /(saya|aku|sy|aq)\\s*(mau|ingin|pengen)\\s*(daftar|join|booking|isi form)\\b/i.test(msg) ||\n    /^(daftar|join|booking|isi form|mau daftar|mau join)\\b/i.test(msg) ||\n    /(boleh|bisa)\\s*(kirim|isi)\\s*(form|formulir)/i.test(msg) ||\n    registrationPhrases.test(msg);\n\n  return (modelMarkedJoin || explicitJoinOnly) && explicitJoinOnly && !asksInfo;\n}\n\nfunction hasHallucinationSignals(text, mode) {\n  if (!String(text || '').trim()) return true;\n  if (/\\bzumba\\b/i.test(text)) return true;\n  if (/\\b(database|prompt|assistant|language model|chatgpt|openai)\\b/i.test(text)) return true;\n  if (/\\[alamat lengkap gym\\]/i.test(text)) return true;\n  if (mode !== 'LOCATION' && /\\b(jl\\.|jalan\\s+[a-z]|rt\\s*\\/\\s*rw|kelurahan|kecamatan|blok\\s+[a-z])\\b/i.test(text)) return true;\n  if (mode !== 'SOCIAL_MEDIA' && /\\bdm instagram\\b|hubungi admin resmi|whatsapp atau media sosial/i.test(text)) return true;\n  return false;\n}\n\nfunction normalizeRupiahMentions(text) {\n  return String(text || '')\n    .toLowerCase()\n    .replace(/(\\d+)\\s*jt\\b/g, (_, n) => String(Number(n) * 1000000))\n    .replace(/(\\d+)\\s*juta\\b/g, (_, n) => String(Number(n) * 1000000))\n    .replace(/(\\d+)\\s*rb\\b/g, (_, n) => String(Number(n) * 1000))\n    .replace(/(\\d+)\\s*k\\b/g, (_, n) => String(Number(n) * 1000))\n    .replace(/(\\d+)\\s*ribu\\b/g, (_, n) => String(Number(n) * 1000));\n}\n\nfunction extractMentionedPrices(text) {\n  const normalized = normalizeRupiahMentions(text);\n  return [...new Set((normalized.match(/\\d{4,9}/g) || [])\n    .map(value => Number(value))\n    .filter(value => Number.isFinite(value) && value > 0))];\n}\n\nfunction rupiahNumber(value) {\n  const numeric = Number(String(value || '').replace(/\\D/g, ''));\n  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;\n}\n\nfunction packageTokens(name) {\n  return String(name || '')\n    .toLowerCase()\n    .split(/[^a-z0-9]+/)\n    .filter(token => token.length >= 4 && !['days', 'challenge', 'program', 'paket', 'class', 'hari', 'fit'].includes(token));\n}\n\nfunction findMatchedPackages(userText, rows) {\n  const msg = String(userText || '').toLowerCase();\n  const mentionedPrices = extractMentionedPrices(msg);\n\n  return rows\n    .map(row => {\n      const fullName = String(row.nama_paket || '').toLowerCase();\n      if (!fullName) return { row, score: 0 };\n\n      let score = 0;\n      if (msg.includes(fullName)) score += 100;\n\n      const rowPrice = rupiahNumber(row.harga);\n      if (rowPrice && mentionedPrices.includes(rowPrice)) score += 80;\n\n      const tokens = packageTokens(fullName);\n      const matchedTokens = tokens.filter(token => msg.includes(token));\n      score += matchedTokens.length * 10;\n      if (tokens.length > 0 && matchedTokens.length === tokens.length) score += 25;\n\n      if (/challenge/.test(msg) && /challenge/.test(fullName)) score += 8;\n      if (/private/.test(msg) && /private/.test(fullName)) score += 8;\n      if (/vip/.test(msg) && /vip/.test(fullName)) score += 8;\n      if (/reguler/.test(msg) && /reguler/.test(fullName)) score += 8;\n\n      return { row, score };\n    })\n    .filter(entry => entry.score > 0)\n    .sort((a, b) => b.score - a.score || (rupiahNumber(a.row.harga) || 0) - (rupiahNumber(b.row.harga) || 0))\n    .map(entry => entry.row);\n}\n\nfunction formatPackageDetail(row) {\n  const harga = rupiahNumber(row.harga);\n  const hargaStr = harga ? `Rp${harga.toLocaleString('id-ID')}` : (row.harga || '-');\n  const lines = [];\n\n  lines.push(`_*${row.nama_paket} (${hargaStr}, ${row.durasi || '-'})*_`);\n\n  if (row.fasilitas_utama) {\n    lines.push('*Fasilitas:*');\n    row.fasilitas_utama\n      .split(/[,;]/)\n      .map(f => f.trim())\n      .filter(Boolean)\n      .forEach(f => lines.push(`· ${f}`));\n  }\n\n  if (row.ketentuan) {\n    lines.push('');\n    lines.push(`*Ketentuan:* ${row.ketentuan}`);\n  }\n\n  return lines.join('\\n');\n}\n\nfunction formatPriceList(rows) {\n  const lines = rows.map(r => {\n    const harga = String(r.harga || '').trim() || '-';\n    const durasi = String(r.durasi || '').trim() || '-';\n    const numericHarga = Number(String(harga).replace(/\\D/g, ''));\n    const hargaText = Number.isFinite(numericHarga) && numericHarga > 0\n      ? `Rp${numericHarga.toLocaleString('id-ID')}`\n      : harga;\n    return `- *${r.nama_paket}*: ${hargaText} (${durasi})`;\n  });\n\n  return [\n    'Tentu kak 😊 Berikut kami kirim pricelist StepUp yang bisa kakak lihat terlebih dahulu ya:',\n    '',\n    ...lines,\n    '',\n    '*Disclaimer:* Setiap paket punya fasilitas dan ketentuan yang berbeda ya kak. Kalau ada paket yang mau ditanyakan lebih detail, nanti kami bantu jelaskan 🙂'\n  ].join('\\n');\n}\n\nfunction formatPackageComparison(rows) {\n  const topRows = rows.slice(0, 2);\n  const blocks = [];\n\n  topRows.forEach(row => {\n    const harga = rupiahNumber(row.harga);\n    const hargaStr = harga ? `Rp${harga.toLocaleString('id-ID')}` : (row.harga || '-');\n    const lines = [];\n\n    lines.push(`*${row.nama_paket} (${hargaStr}, ${row.durasi || '-'})*`);\n\n    if (row.fasilitas_utama) {\n      lines.push('Fasilitas:');\n      row.fasilitas_utama\n        .split(/[,;]/)\n        .map(f => f.trim())\n        .filter(Boolean)\n        .forEach(f => lines.push(`· ${f}`));\n    }\n\n    if (row.ketentuan) {\n      lines.push('');\n      lines.push(`*Ketentuan:* ${row.ketentuan}`);\n    }\n\n    blocks.push(lines.join('\\n'));\n  });\n\n  return blocks.join('\\n\\n');\n}\n\nfunction getGreeting(text) {\n  if (/assalamualaikum/i.test(text)) return 'Waalaikumsalam kak, ';\n  if (/selamat pagi|pagi|morning/i.test(text)) return 'Pagi kak, ';\n  if (/selamat siang|siang/i.test(text)) return 'Siang kak, ';\n  if (/selamat sore|sore/i.test(text)) return 'Sore kak, ';\n  if (/selamat malam|malam/i.test(text)) return 'Malam kak, ';\n  if (/halo|hallo|hello|hi|hey|hai|hei/i.test(text)) return 'Hai kak, ';\n  return '';\n}\n\nfunction startsWithGreeting(text) {\n  return /^(waalaikumsalam|assalamualaikum|selamat pagi|selamat siang|selamat sore|selamat malam|pagi kak|siang kak|sore kak|malam kak|hai kak|halo kak|hello kak|hi kak|hai|halo|hello|hi)\\b/i.test(String(text || '').trim());\n}\n\nconst userText = String(ctx.userMessage || '').trim();\nconst hasGreetingPrefix = !!ctx.hasGreetingPrefix ||\n  /^(halo|hallo|hello|hi|hey|hai|hei|assalamualaikum|selamat pagi|selamat siang|selamat sore|selamat malam)/i.test(userText);\n\nconst allHarga = $('Fetch Sheet Harga').all()\n  .map(d => d.json)\n  .filter(r => {\n    const s = String(r.status || '').toLowerCase();\n    return r && r.nama_paket && (!s || s === 'active' || s === 'aktif');\n  });\n\nconst cleanBase = rawReply || fallbackReply;\nlet isJoin = classifyJoinIntent(ctx.userMessage, cleanBase);\n\nconst explicitRegistration =\n  /^(daftar|join|mau daftar|mau join|pengen daftar|pengen join|ingin daftar|ingin join)\\b/i.test(userText) ||\n  /(boleh|bisa)\\s*(kirim|isi)\\s*(form|formulir)/i.test(userText) ||\n  /(saya|aku|sy|aq)\\s*(mau|ingin|pengen)\\s*(daftar|join|booking)\\b/i.test(userText);\n\nif (explicitRegistration) {\n  isJoin = true;\n}\n\nlet cleanReply = humanClean(cleanBase)\n  .replace(/\\s*\\[INTENT:JOIN\\]\\s*/g, '')\n  .trim() || fallbackReply;\n\nif (hasHallucinationSignals(cleanReply, answerMode)) {\n  cleanReply = fallbackReply;\n}\n\nif (answerMode === 'PRICE_GENERAL_CLARIFY' && allHarga.length > 0) {\n  cleanReply = formatPriceList(allHarga);\n}\n\nconst matchedPackages = findMatchedPackages(userText, allHarga);\nconst matchedPackage = matchedPackages[0] || null;\n\nif (\n  matchedPackage &&\n  /fasilitas|ketentuan|include|termasuk|dapat apa|dapet apa|apa aja/i.test(userText)\n) {\n  cleanReply = formatPackageDetail(matchedPackage);\n}\n\nif (\n  matchedPackages.length >= 2 &&\n  /apa bedanya|bedanya apa|beda apa|beda nya|perbedaannya|perbedaan|compare|bandingkan|vs\\b|versus/i.test(userText)\n) {\n  cleanReply = formatPackageComparison(matchedPackages);\n}\n\nif (answerMode !== 'LOCATION') {\n  cleanReply = cleanReply\n    .split('\\n')\n    .filter(line => !/(\\[alamat lengkap gym\\]|\\bjl\\.\\s|\\bjalan\\s+[a-z]|\\brt\\s*\\/|\\bkelurahan\\b)/i.test(line))\n    .join('\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim() || fallbackReply;\n}\n\nif (answerMode === 'SCHEDULE_SPECIFIC_DAY') {\n  cleanReply = cleanReply\n    .split('\\n')\n    .filter(line => !/mau dicekkan.*hari apa|cekkan.*hari apa/i.test(line))\n    .join('\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim() || fallbackReply;\n}\n\n// Greeting final: jangan tambahkan sapaan ganda.\n// Hanya tambahkan greeting jika mode memang GREETING dan reply belum punya sapaan.\nif (answerMode === 'GREETING' && hasGreetingPrefix && cleanReply && !startsWithGreeting(cleanReply)) {\n  const greeting = getGreeting(userText);\n  if (greeting) {\n    cleanReply = greeting + cleanReply.charAt(0).toLowerCase() + cleanReply.slice(1);\n  }\n}\n\n// Jika user tidak menyapa dan ini bukan mode greeting, bersihkan sapaan pembuka yang tidak perlu.\nif (!hasGreetingPrefix && answerMode !== 'GREETING') {\n  cleanReply = cleanReply\n    .replace(/^(selamat pagi|selamat siang|selamat sore|selamat malam|pagi kak|siang kak|sore kak|malam kak|hai kak|halo kak|hello kak|hi kak|hai|halo|hello|hi|assalamualaikum|waalaikumsalam)[!,.:\\s-]*/i, '')\n    .trim();\n}\n\nconst charLength = cleanReply.length;\nlet delaySeconds;\nif (charLength < 80) delaySeconds = 3;\nelse if (charLength < 200) delaySeconds = 4;\nelse if (charLength < 400) delaySeconds = 5;\nelse delaySeconds = 6;\n\nreturn {\n  json: {\n    ...item,\n    replyText: cleanReply,\n    isJoin,\n    joinIntentGuard: isJoin ? 'explicit_join' : 'info_or_unclear',\n    hadError: !rawReply,\n    errorMessage: rawReply ? '' : 'Model returned empty output',\n    delaySeconds,\n    chat_id: item.chat_id || ctx.chat_id,\n    whatsapp_number: item.whatsapp_number || ctx.whatsapp_number,\n    client_id: item.client_id || ctx.client_id,\n    session_name: item.session_name || ctx.session_name || 'Tab',\n    timestamp: item.timestamp || ctx.timestamp,\n    lead_id: item.lead_id || ctx.lead_id\n  }\n};"
+      },
+      "id": "e50ec964-e00e-4fb5-aa98-d4eea26e3913",
+      "name": "Parse LLM Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1808,
+        24512
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "tableId": "chat_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "chat_id",
+              "fieldValue": "={{ $json.chat_id }}"
+            },
+            {
+              "fieldId": "role",
+              "fieldValue": "assistant"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.replyText }}"
+            },
+            {
+              "fieldId": "client_id",
+              "fieldValue": "={{ $json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "ac47514b-7b65-4b83-aea7-7150c10af3bd",
+      "name": "Insert AI Message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        24192
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "amount": "={{ $(\"Parse LLM Result\").first().json.delaySeconds || 5 }}"
+      },
+      "id": "8813d78a-c626-47bb-ac16-f2e74fc2fcbd",
+      "name": "Wait Before Reply",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -416,
+        24512
+      ],
+      "webhookId": "39f6aaf0-bb4f-4643-b5ac-e9489ee77627"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "is-join",
+              "leftValue": "={{ $json.isJoin }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3f62089c-f14c-4735-a28c-3bacfa592c0b",
+      "name": "Route Join Intent",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        24192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const formText =\n  'Siap Kak, aku bantu proses pendaftarannya ya!\\nSebelum mulai, mohon isi data berikut terlebih dahulu agar kami bisa mengenal kebutuhan dan target latihan Kakak dengan lebih baik ðŸ™‚\\n\\n' +\n  'Nama:\\n' +\n  'Domisili:\\n' +\n  'Berat Badan:\\n' +\n  'Tinggi Badan:\\n' +\n  'Goals:\\n' +\n  'Alasan Join:\\n\\n';\nreturn { json: { ...$input.first().json, dynamicFormText: formText, join_form_text: formText, replyText: formText, text: formText } };"
+      },
+      "id": "f4b23258-591e-404a-81a3-74e4e7ccc19c",
+      "name": "Build Dynamic Join Form (Spintax)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        23792
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({ chatId: $json.chat_id, text: $json.join_form_text || $json.dynamicFormText || $json.replyText || $json.text || '', session: $json.session_name || 'Tab' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "a395b3e5-7658-47a8-8c51-fea773cd2ac8",
+      "name": "Send Join Form",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1344,
+        23568
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "whatsapp_number",
+              "condition": "eq",
+              "keyValue": "={{ $('Build Dynamic Join Form (Spintax)').first().json.whatsapp_number }}"
+            },
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Build Dynamic Join Form (Spintax)').first().json.client_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "current_state",
+              "fieldValue": "AWAITING_FORM"
+            },
+            {
+              "fieldId": "last_message_at",
+              "fieldValue": "={{ $('Build Dynamic Join Form (Spintax)').first().json.timestamp }}"
+            }
+          ]
+        }
+      },
+      "id": "9efd07ab-5e6e-4670-9a0a-c15764380a80",
+      "name": "Set State AWAITING FORM",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        23568
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({\n  chatId: $json.chat_id,\n  text: String($json.replyText || ''),\n  session: $json.session_name || 'Tab'\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "ff016f0c-7862-4e5c-a610-1f7386e69016",
+      "name": "Send User Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1264,
+        24400
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "whatsapp_number",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.whatsapp_number }}"
+            },
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.client_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "current_state",
+              "fieldValue": "IDLE"
+            },
+            {
+              "fieldId": "last_message_at",
+              "fieldValue": "={{ $('Normalize Incoming Message').first().json.timestamp }}"
+            },
+            {
+              "fieldId": "last_chat_date",
+              "fieldValue": "={{ $('Normalize Incoming Message').first().json.timestamp }}"
+            }
+          ]
+        }
+      },
+      "id": "b6492e04-b7f0-456c-b2c6-a1cb63fa9f56",
+      "name": "Unlock Session: Set IDLE",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2432,
+        23280
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "ai_sessions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "whatsapp_number",
+              "condition": "eq",
+              "keyValue": "={{ $json.whatsapp_number }}"
+            },
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.client_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "chat_history",
+              "fieldValue": "={{ [] }}"
+            },
+            {
+              "fieldId": "session_name",
+              "fieldValue": "={{ $json.session_name }}"
+            }
+          ]
+        }
+      },
+      "id": "461e2f14-b007-4064-9a77-2ae3d1fe44da",
+      "name": "Update AI Session On Unlock",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2720,
+        23280
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "join-form-valid",
+              "leftValue": "={{ $json.isValid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "17f17f8c-fa59-4c7b-aed2-3719d9d5c500",
+      "name": "Join Form Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1472,
+        22832
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({ chatId: $json.chat_id, text: String($json.reminderText || ''), session: $json.session_name || 'Tab' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "2bfea27a-3204-4453-b6b1-114bf1e2216f",
+      "name": "Send Join Form Reminder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -784,
+        23200
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * (7 - 3 + 1) + 3) }}"
+      },
+      "id": "5015e3a1-6e8d-4a91-babe-974628128821",
+      "name": "Wait Before Admin New Lead",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -2160,
+        23168
+      ],
+      "webhookId": "8659b7a5-b28c-43c2-aa7d-5c018c790b8c"
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * (7 - 3 + 1) + 3) }}"
+      },
+      "id": "e1d94125-d5bf-4f51-911a-40c7bedf8ffd",
+      "name": "Wait Before Admin Rechat",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -2160,
+        23408
+      ],
+      "webhookId": "315941b2-08c1-44a7-811a-1f78f393eaf2"
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * (7 - 3 + 1) + 3) }}"
+      },
+      "id": "d3a98b08-4ef1-46dc-9559-506f9ebd899a",
+      "name": "Wait Before Admin Join Lead",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        400,
+        23056
+      ],
+      "webhookId": "cb771be3-5899-4fb7-8e7e-d12983d533a0"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst leadState = $('Check Lead State').first().json || {};\nconst currentState = String(leadState.current_state || 'IDLE').toUpperCase();\nconst lastMessageAt = leadState.previous_last_message_at ? new Date(leadState.previous_last_message_at).getTime() : 0;\nconst minutesSinceLastKnownMessage = lastMessageAt ? Math.floor((Date.now() - lastMessageAt) / 60000) : null;\nlet shouldSendJoinForm = true;\nlet guardReason = 'first_join_invite';\nlet replyText = input.replyText;\nif (currentState === 'AWAITING_FORM') {\n  shouldSendJoinForm = false;\n  guardReason = 'already_awaiting_form';\n  replyText = 'Siap Kak, aku bantu proses pendaftarannya ya!\\nSebelum mulai, mohon isi data berikut terlebih dahulu agar kami bisa mengenal kebutuhan dan target latihan Kakak dengan lebih baik Ã°Å¸ËœÅ \\n\\nNama:\\nDomisili:\\nBerat Badan:\\nTinggi Badan:\\nGoals:\\nAlasan Join:';\n} \nreturn { json: { ...input, shouldSendJoinForm, joinGuardReason: guardReason, replyText } };\n"
+      },
+      "id": "c14040b5-6188-4db8-85bf-6bd67ece158d",
+      "name": "Gate Join Form Dispatch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        336,
+        23792
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * (7 - 3 + 1) + 3) }}"
+      },
+      "id": "e0e8e9c4-9fb1-4256-acf8-6326ba50b12c",
+      "name": "Wait Before Join Form",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        23792
+      ],
+      "webhookId": "f6651f6b-5d07-41fe-b8be-5fcb0a51f3d5"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "={{ $json.llmPrompt }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        -3136,
+        24512
+      ],
+      "id": "e6a642ae-b9c4-4e20-bb94-b8c2bd9f7a84",
+      "name": "OpenAI Human WhatsApp Reply",
+      "credentials": {
+        "openAiApi": {
+          "id": "DiHgpfyCb1bIvgSD",
+          "name": "OpenAI account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/typing",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chatId: $json.chat_id,\n  presence: 'typing'\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "24736f6a-d062-4b84-91fc-49a40de4bfb9",
+      "name": "Send Typing Before Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        16,
+        24448
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/typing",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "=={{ JSON.stringify({\n  chatId: $json.chat_id,\n  presence: 'typing'\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "2e339a8c-0512-4a49-be50-bef98e7f08f9",
+      "name": "Send Typing Before Join Form",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1344,
+        23824
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chatId\": \"{{$('Join Form Valid?').first().json.whatsapp_number + '@s.whatsapp.net'}}\",\n  \"text\": \"Terima kasih Kak, data Kakak sudah kami terima dengan baik.\\n\\nSaat ini tim kami sedang melakukan pengecekan dan akan segera menghubungi Kakak untuk memberikan informasi serta rekomendasi program yang paling sesuai dengan kebutuhan dan goals Kakak.\\n\\nMohon ditunggu sebentar ya Kak ðŸ˜Š\",\n  \"session\": \"{{$('Join Form Valid?').first().json.session_name || 'Tab'}}\"\n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "d83bcb95-9b3e-4c26-8d80-2cebdc514c86",
+      "name": "Send Join Submission Thanks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1312,
+        23056
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst draftReply = String(\n  item.draftReply ||\n  item.output?.[0]?.content?.[0]?.text ||\n  item.text ||\n  item.message?.content ||\n  item.response?.text ||\n  ''\n).trim();\n\nconst ctx = $('Build Human WhatsApp Context').first().json;\nconst userMessage    = String(ctx.userMessage || '').trim();\nconst answerMode     = String(ctx.answerMode || 'GENERAL');\nconst locationText   = String(ctx.locationText || '');\nconst priceRangeText = String(ctx.priceRangeText || '');\nconst socialText     = String(ctx.socialText || '');\nconst adminText      = String(ctx.adminText || '');\nconst hasGreetingPrefix = !!ctx.hasGreetingPrefix;\n\nconst finalEditorPrompt = `Kamu editor final pesan WhatsApp StepUp Ladies Gym.\n\nTugasmu HANYA merapikan draft agar lebih natural sebagai pesan WA manusia.\nJANGAN menambah fakta baru. JANGAN mengganti fakta. JANGAN merangkum sampai ada data hilang.\nKalau draft sudah baik, pertahankan isinya semirip mungkin — minimal edit.\n\nMode jawaban: ${answerMode}\nPesan user: ${userMessage}\nAda sapaan di awal user: ${hasGreetingPrefix ? 'ya' : 'tidak'}\n\nDraft jawaban:\n${draftReply}\n\nData pengaman (gunakan untuk verifikasi saja, jangan tambahkan jika tidak ada di draft):\n- Alamat valid: ${locationText || '(tidak ada)'}\n- Rentang harga valid: ${priceRangeText || '(tidak ada)'}\n- Link Instagram valid: ${socialText || '(tidak ada)'}\n- Kontak admin valid: ${adminText || '(tidak ada)'}\n\nAturan final:\n0. Jika user membuka dengan sapaan, pertahankan atau tambahkan pembuka singkat natural (\"Malam kak,\") lalu lanjut ke inti jawaban. Jika user tidak menyapa, jangan tambah greeting.\n1. Output hanya isi pesan final plain text WA. Tanpa markdown, tanpa tanda bintang, tanpa heading.\n2. Hapus HANYA frasa CTA robot yang terasa mekanis di akhir pesan: \"kami siap membantu\", \"jangan ragu menghubungi kami\", \"feel free to ask\". Jangan hapus kalimat redirect ke admin yang terasa hangat dan natural.\n3. JANGAN tambah nama kelas, jadwal, harga, promo, coach, alamat, atau fasilitas yang tidak ada di draft.\n4. Jangan sebut Zumba.\n5. Rapikan hanya struktur kalimat jika perlu — jangan ubah isi faktanya sama sekali.\n6. Jika draft memuat token [INTENT:JOIN], pertahankan token itu persis di akhir pesan tanpa diubah.\n\nAturan per mode:\n- GREETING: 1-2 kalimat hangat, sesuai waktu. Tidak perlu tambah info lain.\n- LOCATION: pertahankan alamat persis dari draft. Jangan tambah atau ubah alamat.\n- ADMIN_INFO: pertahankan SEMUA nomor admin dari draft. Jangan hapus satupun.\n- SOCIAL_MEDIA: pastikan link Instagram tampil persis apa adanya tanpa disingkat. Jika draft tidak ada link tapi socialText ada, sisipkan link tersebut.\n- PRICE_GENERAL_CLARIFY: pertahankan SEMUA item paket. Jangan dipotong, jangan diringkas jadi sebagian saja.\n- PRICE_SPECIFIC: pertahankan detail harga dan fasilitas paket yang relevan.\n- PRICE_OBJECTION: pertahankan empati dan penjelasan value. Jangan potong info fasilitas yang disebutkan. Nada hangat, tidak defensif.\n- CLASS_GENERAL: pertahankan SEMUA nama kelas. Jangan potong.\n- SCHEDULE_SPECIFIC_DAY: pertahankan hanya jadwal hari yang relevan, jangan tambahkan hari lain.\n- COACH_INFO: pertahankan info coach apa adanya.\n- ABOUT_STEPUP: pertahankan semua deskripsi tentang StepUp. Jangan potong.\n- GENERAL: minimal edit — hanya rapikan kalimat jika terasa kaku.`;\n\nreturn {\n  json: {\n    ...item,\n    draftReply,\n    finalEditorPrompt,\n    answerMode,\n    socialText,\n    adminText,\n    chat_id: ctx.chat_id,\n    whatsapp_number: ctx.whatsapp_number,\n    client_id: ctx.client_id,\n    session_name: ctx.session_name,\n    timestamp: ctx.timestamp,\n    lead_id: ctx.lead_id\n  }\n};"
+      },
+      "id": "74dacf36-35a0-4140-a636-d5b8f4dcec5b",
+      "name": "Build Humanizer Final Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2688,
+        24512
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "={{ $json.finalEditorPrompt }}\n\n---\n\nKamu editor pesan WhatsApp untuk StepUp Ladies Gym.\n\nTugasmu: ambil draft yang diberikan dan tulis ulang secukupnya agar terdengar natural sebagai pesan WA manusia yang hangat. Bukan menulis ulang dari nol — cukup haluskan gaya bahasanya.\n\nATURAN MUTLAK:\n- Gunakan HANYA fakta yang sudah ada di draft. Jangan tambah, ubah, atau karang fakta apapun.\n- Jangan hapus informasi dari draft — semua fakta, harga, jadwal, nama, nomor harus tetap ada.\n- Jika draft sudah terasa natural, ubah sesedikit mungkin.\n\nLARANGAN:\n- Jangan sebut Zumba\n- Jangan ubah harga, nama coach, jadwal, nama paket, atau nomor admin\n- Jangan sebut \"database\", \"sistem\", \"AI\", \"prompt\", atau proses internal apapun\n- Jangan pakai markdown atau format brosur\n- Jangan hapus kalimat redirect ke admin — itu penting dan boleh ada\n\nGAYA:\n- Ringan, sopan, hangat, terasa seperti admin WA manusia\n- Plain text saja\n- Kalimat pendek lebih baik dari kalimat panjang berbelit\n- Jika draft berisi token [INTENT:JOIN], pertahankan token itu persis di akhir pesan\n\nOUTPUT: tulis hanya isi pesan WA final. Tidak ada label, judul, atau penjelasan tambahan."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        -2304,
+        24512
+      ],
+      "id": "f640c4e3-2efe-4505-b2d8-45132bb00c5f",
+      "name": "OpenAI Final Humanizer",
+      "credentials": {
+        "openAiApi": {
+          "id": "DiHgpfyCb1bIvgSD",
+          "name": "OpenAI account 2"
+        }
+      },
+      "notes": "Temperature dinaikkan 0.2Ã¢â€ â€™0.5 agar lebih natural"
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = String($json.userMessage || '').trim();\nconst lower = msg.toLowerCase();\n\nfunction hasLabel(label) {\n  return new RegExp('(^|\\\\n)\\\\s*' + label + '\\\\s*:', 'i').test(msg);\n}\n\nconst formLabelCount = ['nama', 'domisili', 'berat badan', 'bb', 'tinggi badan', 'tb', 'goals', 'goal', 'alasan'].filter(hasLabel).length;\nconst asksInfo = /(apa saja|apa aja|harga|berapa|biaya|promo|free trial|trial|kelas|program|jadwal|jam|hari|kapan|lokasi|alamat|dimana|fasilitas|coach|special class|\\?)/i.test(lower);\nconst looksLikeFilledForm = formLabelCount >= 3;\n\nreturn {\n  json: {\n    ...$json,\n    is_actual_join_form: looksLikeFilledForm && !asksInfo,\n    awaitingFormRouteReason: looksLikeFilledForm ? 'looks_like_form' : (asksInfo ? 'info_question_while_awaiting_form' : 'not_form')\n  }\n};"
+      },
+      "id": "0a80c6fd-353a-41b1-8fd1-e06236eda286",
+      "name": "Gate Awaiting Form Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2592,
+        23072
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "actual-form",
+              "leftValue": "={{ $json.is_actual_join_form }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4e13861-338a-4eb0-bde8-ddb17ed1348a",
+      "name": "Is Actual Join Form?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2384,
+        22928
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "ref_olahraga",
+        "limit": 500,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Normalize Incoming Message').first().json.client_id }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -800,
+        23952
+      ],
+      "id": "c4823650-cdb1-46ec-bf02-4ac0bbddc361",
+      "name": "Fetch Sheet Olahraga",
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $('Normalize Incoming Message').first().json || $json;\nconst rawUserMessage = String(msg.userMessage || '').trim();\nconst text = rawUserMessage.toLowerCase();\n\nfunction hasAny(patterns) {\n  return patterns.some((pattern) => pattern.test(text));\n}\n\nconst greetingOnly = /^(halo|hallo|hai|hi|hey|hei|pagi|siang|sore|malam|assalamualaikum|permisi|halo kak|hai kak|hi kak)[\\s!.,]*$/i.test(rawUserMessage);\n\nconst greetingPrefix = /^(halo|hallo|hai|hi|hey|hei|selamat pagi|selamat siang|selamat sore|selamat malam|assalamualaikum|permisi)[\\s,!.]*/i.test(rawUserMessage);\n\nconst acknowledgementOnly = /^(oke|ok|okey|okay|baik|siap|sip|noted|terima kasih|makasih|makasi|thanks|thank you|ty|okee|baik kak|siap kak|oke kak|ok kak|terima kasih kak|makasih kak|sip kak)[\\s!.,]*$/i.test(rawUserMessage);\n\nconst joinIntent = hasAny([\n  /\\bmau daftar\\b/i,\n  /\\bpengen daftar\\b/i,\n  /\\bingin daftar\\b/i,\n  /\\bmau join\\b/i,\n  /\\bpengen join\\b/i,\n  /\\bingin join\\b/i,\n  /\\bdaftar\\b/i,\n  /\\bjoin\\b/i,\n  /\\bbooking\\b/i,\n  /\\bkirim form\\b/i,\n  /\\bminta form\\b/i,\n  /\\bisi form\\b/i,\n  /\\bformulir\\b/i,\n]);\n\nconst consultationIntent = hasAny([\n  /\\bkonsul\\b/i,\n  /\\bkonsultasi\\b/i,\n  /\\bsaran\\b/i,\n  /\\brekomendasi\\b/i,\n  /\\bcocok\\b/i,\n  /\\bmenurut\\b/i,\n  /\\bgimana baiknya\\b/i,\n  /\\bbutuh arahan\\b/i,\n  /\\bbingung pilih\\b/i,\n]);\n\nconst classDetailIntent = hasAny([\n  /\\bitu kayak gimana\\b/i,\n  /\\bapa itu\\b/i,\n  /\\bapa sih\\b/i,\n  /\\bseperti apa\\b/i,\n  /\\bjelasin\\b/i,\n  /\\bpenjelasan\\b/i,\n  /\\bdetail\\b/i,\n  /\\bmaksudnya\\b/i,\n]);\n\nconst locationIntent = hasAny([\n  /\\balamat\\b/i,\n  /\\blokasi\\b/i,\n  /\\bdimana\\b/i,\n  /\\bdi mana\\b/i,\n  /\\bmaps\\b/i,\n  /\\bgoogle map\\b/i,\n  /\\bkepanjen\\b/i,\n  /\\bmalang\\b/i,\n]);\n\nconst adminIntent = hasAny([\n  /\\badmin\\b/i,\n  /\\bnomor admin\\b/i,\n  /\\bkontak admin\\b/i,\n  /\\bwa admin\\b/i,\n  /\\bwhatsapp admin\\b/i,\n  /\\bcs\\b/i,\n  /\\bhubungi admin\\b/i,\n]);\n\nconst classNames = [\n  '3 muscle',\n  'bootypump',\n  'trampoline class',\n  'body combat',\n  'tabata workout',\n  'belly dance',\n  'core',\n  'power step',\n  'fitdance',\n  'boxing',\n  'body transformation',\n  'yoga',\n  'strength training',\n  'aerobic',\n  'kegel',\n  'stik flow',\n  'hot mat pilates',\n  'fitball',\n  'hot twerk',\n  'boxing woman',\n  'special class'\n];\n\nconst matchedClassNames = classNames.filter(name => text.includes(name));\nconst hasClassMention = matchedClassNames.length > 0;\n\nconst infoQuestionIntent = hasAny([\n  /\\bharga\\b/i,\n  /\\bbiaya\\b/i,\n  /\\bpaket\\b/i,\n  /\\bkelas\\b/i,\n  /\\bjadwal\\b/i,\n  /\\bcoach\\b/i,\n  /\\bpromo\\b/i,\n  /\\btrial\\b/i,\n  /\\bprogram\\b/i,\n  /\\bmember\\b/i,\n  /\\bpricelist\\b/i,\n  /\\bprice list\\b/i,\n  /\\bapa saja\\b/i,\n  /\\bapa aja\\b/i,\n  /\\bberapa\\b/i,\n  /\\b\\?+\\b/i,\n]);\n\nconst isVeryShort = rawUserMessage.length > 0 && rawUserMessage.length <= 12;\nconst ambiguousIntent =\n  !greetingOnly &&\n  !acknowledgementOnly &&\n  !joinIntent &&\n  !consultationIntent &&\n  !classDetailIntent &&\n  !locationIntent &&\n  !adminIntent &&\n  !infoQuestionIntent &&\n  isVeryShort;\n\nlet micro_intent = 'general_info';\n\nif (greetingOnly) micro_intent = 'greeting';\nelse if (acknowledgementOnly) micro_intent = 'acknowledgement';\nelse if (joinIntent) micro_intent = 'join_intent';\nelse if (consultationIntent) micro_intent = 'consultation';\nelse if (classDetailIntent && hasClassMention) micro_intent = 'class_detail';\nelse if (locationIntent) micro_intent = 'location';\nelse if (adminIntent) micro_intent = 'admin_request';\nelse if (ambiguousIntent) micro_intent = 'ambiguous';\nelse if (infoQuestionIntent) micro_intent = 'info_request';\n\nconst shouldBypassMainLlm = greetingOnly || acknowledgementOnly;\nconst needsFollowupQuestion = micro_intent === 'ambiguous';\nconst conversationType =\n  micro_intent === 'consultation'\n    ? 'consultative'\n    : ['info_request', 'class_detail', 'location', 'admin_request'].includes(micro_intent)\n      ? 'informational'\n      : micro_intent === 'join_intent'\n        ? 'conversion'\n        : 'light';\n\nreturn {\n  json: {\n    ...msg,\n    raw_user_message: rawUserMessage,\n    micro_intent,\n    conversation_type: conversationType,\n    has_greeting_prefix: greetingPrefix,\n    is_greeting_only: greetingOnly,\n    is_acknowledgement_only: acknowledgementOnly,\n    is_join_intent: joinIntent,\n    is_consultation_intent: consultationIntent,\n    is_class_detail_intent: classDetailIntent && hasClassMention,\n    is_location_intent: locationIntent,\n    is_admin_intent: adminIntent,\n    is_ambiguous_intent: ambiguousIntent,\n    matched_class_names: matchedClassNames,\n    has_class_mention: hasClassMention,\n    should_bypass_main_llm: shouldBypassMainLlm,\n    needs_followup_question: needsFollowupQuestion\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1920,
+        22560
+      ],
+      "id": "1c53d766-2f3a-47df-9b25-9b67004e7d70",
+      "name": "Classify Conversation Micro Intent"
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $('Classify Conversation Micro Intent').first().json || $json;\nconst rawUserMessage = String(msg.raw_user_message || msg.userMessage || '').trim();\nconst text = rawUserMessage.toLowerCase();\n\nfunction matchAny(patterns) {\n  return patterns.find((pattern) => pattern.test(text)) || null;\n}\n\nconst ackMap = [\n  {\n    type: 'thanks',\n    patterns: [\n      /\\bterima kasih\\b/i,\n      /\\bmakasih\\b/i,\n      /\\bmakasi\\b/i,\n      /\\bthanks\\b/i,\n      /\\bthank you\\b/i,\n      /\\bty\\b/i\n    ]\n  },\n  {\n    type: 'confirmation',\n    patterns: [\n      /\\boke\\b/i,\n      /\\bok\\b/i,\n      /\\bokay\\b/i,\n      /\\bokey\\b/i,\n      /\\bokee\\b/i,\n      /\\bsiap\\b/i,\n      /\\bsip\\b/i,\n      /\\bnoted\\b/i,\n      /\\bsiap kak\\b/i,\n      /\\bbaik kak\\b/i,\n      /\\boke kak\\b/i,\n      /\\bok kak\\b/i\n    ]\n  },\n  {\n    type: 'closing',\n    patterns: [\n      /\\bbaik\\b/i,\n      /\\bsiap ya\\b/i,\n      /\\bokay kak\\b/i,\n      /\\bokee kak\\b/i\n    ]\n  }\n];\n\nlet ackType = '';\nlet isAcknowledgement = false;\n\nfor (const group of ackMap) {\n  const found = matchAny(group.patterns);\n  if (found) {\n    ackType = group.type;\n    isAcknowledgement = true;\n    break;\n  }\n}\n\nconst isShortReply = rawUserMessage.length > 0 && rawUserMessage.length <= 25;\n\nlet suggestedResponseType = 'none';\nlet acknowledgementMode = 'none';\n\nif (isAcknowledgement) {\n  if (ackType === 'thanks') {\n    suggestedResponseType = 'warm_ack';\n    acknowledgementMode = 'no_need_to_push';\n  } else if (ackType === 'confirmation') {\n    suggestedResponseType = 'light_confirm';\n    acknowledgementMode = 'offer_if_needed';\n  } else if (ackType === 'closing') {\n    suggestedResponseType = 'soft_close';\n    acknowledgementMode = 'close_politely';\n  }\n}\n\nconst canAutoReply =\n  isAcknowledgement &&\n  isShortReply &&\n  !msg.is_consultation_intent &&\n  !msg.is_join_intent &&\n  !msg.is_ambiguous_intent;\n\nreturn {\n  json: {\n    ...msg,\n    is_acknowledgement: isAcknowledgement,\n    ack_type: ackType || null,\n    is_short_reply: isShortReply,\n    suggested_ack_response_type: suggestedResponseType,\n    acknowledgement_mode: acknowledgementMode,\n    can_auto_reply_ack: canAutoReply\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1568,
+        22560
+      ],
+      "id": "20eb5429-357c-450e-aa9e-796349c42eb7",
+      "name": "Detect Acknowledgement"
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $('Detect Acknowledgement').first().json || $json;\nconst rawUserMessage = String(msg.raw_user_message || msg.userMessage || '').trim();\nconst text = rawUserMessage.toLowerCase();\n\nfunction hasAny(patterns) {\n  return patterns.some((pattern) => pattern.test(text));\n}\n\nconst consultationPatterns = [\n  /\\bkonsul\\b/i,\n  /\\bkonsultasi\\b/i,\n  /\\bmau konsultasi\\b/i,\n  /\\bpengen konsultasi\\b/i,\n  /\\bingin konsultasi\\b/i,\n  /\\bminta saran\\b/i,\n  /\\bsaran\\b/i,\n  /\\brekomendasi\\b/i,\n  /\\bmenurut kak\\b/i,\n  /\\bgimana baiknya\\b/i,\n  /\\bbingung pilih\\b/i,\n  /\\bcocok yang mana\\b/i,\n  /\\bsebaiknya\\b/i,\n  /\\barahan\\b/i,\n  /\\bbisa bantu pilih\\b/i\n];\n\nconst bodyGoalPatterns = [\n  /\\bturun berat badan\\b/i,\n  /\\bnaik berat badan\\b/i,\n  /\\bmenurunkan berat badan\\b/i,\n  /\\bmembentuk tubuh\\b/i,\n  /\\bmengencangkan\\b/i,\n  /\\bmengecilkan\\b/i,\n  /\\bperut\\b/i,\n  /\\bpinggang\\b/i,\n  /\\bpostur\\b/i,\n  /\\bbakar lemak\\b/i,\n  /\\bfit\\b/i,\n  /\\bsehat\\b/i,\n  /\\btarget\\b/i,\n  /\\bgoals?\\b/i\n];\n\nconst conditionNarrativePatterns = [\n  /\\bdulu pernah\\b/i,\n  /\\bsebelumnya\\b/i,\n  /\\bhabis\\b/i,\n  /\\bsetelah\\b/i,\n  /\\bsaat ini\\b/i,\n  /\\bsekarang\\b/i,\n  /\\bmasih\\b/i,\n  /\\bbelum berani\\b/i,\n  /\\bpengen mulai\\b/i,\n  /\\bmau mulai\\b/i,\n  /\\bkondisi\\b/i,\n  /\\bcerita\\b/i\n];\n\nconst productOrProgramSelectionPatterns = [\n  /\\bpakai produk\\b/i,\n  /\\bproduk yang mana\\b/i,\n  /\\bprogram yang mana\\b/i,\n  /\\bpaket yang mana\\b/i,\n  /\\bcocok program apa\\b/i,\n  /\\bcocok paket apa\\b/i,\n  /\\bmulai dari mana\\b/i,\n  /\\bmana yang cocok\\b/i\n];\n\nconst explicitConsultation = hasAny(consultationPatterns);\nconst hasGoalContext = hasAny(bodyGoalPatterns);\nconst hasNarrativeContext = hasAny(conditionNarrativePatterns);\nconst hasSelectionContext = hasAny(productOrProgramSelectionPatterns);\n\nconst longMessage = rawUserMessage.length >= 80;\n\nconst needsConsultation =\n  msg.is_consultation_intent ||\n  explicitConsultation ||\n  (hasGoalContext && hasNarrativeContext) ||\n  hasSelectionContext ||\n  (longMessage && (hasGoalContext || hasNarrativeContext));\n\nlet consultationTopic = null;\n\nif (/produk|herbalife|shake|teh/i.test(text)) {\n  consultationTopic = 'nutrition_product';\n} else if (/paket|program|kelas|latihan/i.test(text) && hasSelectionContext) {\n  consultationTopic = 'program_selection';\n} else if (hasGoalContext) {\n  consultationTopic = 'body_goal';\n} else if (explicitConsultation) {\n  consultationTopic = 'general_consultation';\n}\n\nlet consultationPriority = 'low';\nif (needsConsultation && longMessage) consultationPriority = 'medium';\nif (needsConsultation && (hasGoalContext && hasNarrativeContext)) consultationPriority = 'high';\n\nconst shouldAvoidDirectCatalogReply =\n  needsConsultation &&\n  !msg.is_acknowledgement &&\n  !msg.is_greeting_only;\n\nreturn {\n  json: {\n    ...msg,\n    needs_consultation: needsConsultation,\n    consultation_topic: consultationTopic,\n    consultation_priority: consultationPriority,\n    has_goal_context: hasGoalContext,\n    has_narrative_context: hasNarrativeContext,\n    has_selection_context: hasSelectionContext,\n    explicit_consultation_request: explicitConsultation,\n    should_avoid_direct_catalog_reply: shouldAvoidDirectCatalogReply\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1136,
+        22560
+      ],
+      "id": "27bf62cb-e1bc-4b9d-abdd-895cfd27b0ef",
+      "name": "Consultation Need Detector"
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $('Consultation Need Detector').first().json || $json;\nconst rawUserMessage = String(msg.raw_user_message || msg.userMessage || '').trim();\nconst text = rawUserMessage.toLowerCase();\n\nconst riskFlags = [];\n\nfunction pushFlag(flag, patterns) {\n  if (patterns.some((pattern) => pattern.test(text))) {\n    riskFlags.push(flag);\n  }\n}\n\npushFlag('postpartum', [\n  /\\bmelahirkan\\b/i,\n  /\\bhabis lahiran\\b/i,\n  /\\bpasca melahirkan\\b/i,\n  /\\bpostpartum\\b/i,\n  /\\bsetelah lahiran\\b/i\n]);\n\npushFlag('c_section', [\n  /\\bsc\\b/i,\n  /\\bsesar\\b/i,\n  /\\bsectio\\b/i,\n  /\\bcaesar\\b/i\n]);\n\npushFlag('pain_or_injury', [\n  /\\bsakit\\b/i,\n  /\\bnyeri\\b/i,\n  /\\bcedera\\b/i,\n  /\\bjahitan\\b/i,\n  /\\bbermasalah\\b/i,\n  /\\bngilu\\b/i,\n  /\\bterasa sakit\\b/i\n]);\n\npushFlag('fear_to_exercise', [\n  /\\bbelum berani olahraga\\b/i,\n  /\\btakut olahraga\\b/i,\n  /\\bgak berani olahraga\\b/i,\n  /\\bnggak berani olahraga\\b/i,\n  /\\btakut mulai\\b/i\n]);\n\npushFlag('medical_or_recovery_context', [\n  /\\bpemulihan\\b/i,\n  /\\brecovery\\b/i,\n  /\\bkontrol\\b/i,\n  /\\bkonsul lagi\\b/i,\n  /\\bdokter\\b/i,\n  /\\bterapi\\b/i\n]);\n\npushFlag('nutrition_only_preference', [\n  /\\bpake herbalife dulu\\b/i,\n  /\\bpakai herbalife dulu\\b/i,\n  /\\bshake dulu\\b/i,\n  /\\bproduk dulu\\b/i,\n  /\\btehnya\\b/i,\n  /\\bherbalife\\b/i\n]);\n\nconst hasSensitiveCondition = riskFlags.length > 0;\n\nconst safeModeRequired =\n  hasSensitiveCondition ||\n  (msg.needs_consultation && msg.consultation_priority === 'high');\n\nlet recommendedHandling = 'normal_info';\n\nif (hasSensitiveCondition) {\n  recommendedHandling = 'empathetic_consultative';\n}\n\nif (\n  riskFlags.includes('postpartum') ||\n  riskFlags.includes('c_section') ||\n  riskFlags.includes('pain_or_injury')\n) {\n  recommendedHandling = 'admin_or_coach_handoff';\n}\n\nconst shouldBlockDirectRecommendation =\n  hasSensitiveCondition &&\n  (\n    riskFlags.includes('postpartum') ||\n    riskFlags.includes('c_section') ||\n    riskFlags.includes('pain_or_injury') ||\n    riskFlags.includes('medical_or_recovery_context')\n  );\n\nreturn {\n  json: {\n    ...msg,\n    has_sensitive_condition: hasSensitiveCondition,\n    risk_flags: riskFlags,\n    safe_mode_required: safeModeRequired,\n    recommended_handling: recommendedHandling,\n    should_block_direct_recommendation: shouldBlockDirectRecommendation\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        22560
+      ],
+      "id": "66396c58-8e8e-4136-a460-3566ffa478dd",
+      "name": "Sensitive Condition"
+    },
+    {
+      "parameters": {
+        "jsCode": "const refData = $('Collect Reference Data (Sequential)').first().json || {};\nconst msg =\n  $('Sensitive Condition').first().json ||\n  $('Consultation Need Detector').first().json ||\n  $('Detect Acknowledgement').first().json ||\n  $('Classify Conversation Micro Intent').first().json ||\n  $('Normalize Incoming Message').first().json ||\n  {};\n\nconst rawUserMessage = String(\n  msg.raw_user_message ||\n  msg.userMessage ||\n  refData.userMessage ||\n  ''\n).trim();\n\nconst userText = rawUserMessage.toLowerCase();\n\nfunction safeGet(nodeName) {\n  try {\n    return $(nodeName).all().map(i => i.json).filter(Boolean);\n  } catch (e) {\n    return [];\n  }\n}\n\nconst olahragaRows = safeGet('Fetch Sheet Olahraga').filter(row => {\n  const status = String(row.status || row.Status || '').toLowerCase().trim();\n  return !status || status === 'aktif' || status === 'active';\n});\n\nfunction normalizeText(value) {\n  return String(value || '')\n    .toLowerCase()\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction splitAliases(value) {\n  return String(value || '')\n    .split(/[,/|;]/)\n    .map(v => normalizeText(v))\n    .filter(Boolean);\n}\n\nfunction hasClassDetailCue(text) {\n  return [\n    /\\bitu kayak gimana\\b/i,\n    /\\bapa itu\\b/i,\n    /\\bapa sih\\b/i,\n    /\\bseperti apa\\b/i,\n    /\\bjelasin\\b/i,\n    /\\bpenjelasan\\b/i,\n    /\\bdetail\\b/i,\n    /\\bmaksudnya\\b/i,\n    /\\buntuk apa\\b/i,\n    /\\bkelas apa\\b/i,\n    /\\bbedanya apa\\b/i,\n    /\\bmanfaatnya\\b/i,\n    /\\bcocok untuk siapa\\b/i\n  ].some(pattern => pattern.test(text));\n}\n\nconst normalizedUser = normalizeText(userText);\nconst userTokens = normalizedUser.split(' ').filter(Boolean);\n\nfunction scoreMatch(row) {\n  const namaOlahraga = String(row.nama_olahraga || row['Nama Olahraga'] || '').trim();\n  const aliasRaw = String(row.alias || row.Alias || '').trim();\n\n  const normalizedName = normalizeText(namaOlahraga);\n  const aliases = splitAliases(aliasRaw);\n\n  let score = 0;\n  let matchedBy = null;\n  let matchedValue = null;\n\n  if (!normalizedName) {\n    return { row, score: 0, matchedBy, matchedValue };\n  }\n\n  if (normalizedUser === normalizedName) {\n    score += 200;\n    matchedBy = 'nama_exact';\n    matchedValue = namaOlahraga;\n  }\n\n  if (normalizedUser.includes(normalizedName)) {\n    score += 120;\n    matchedBy = matchedBy || 'nama_in_text';\n    matchedValue = matchedValue || namaOlahraga;\n  }\n\n  if (normalizedName.includes(normalizedUser) && normalizedUser.length >= 4) {\n    score += 60;\n    matchedBy = matchedBy || 'nama_partial';\n    matchedValue = matchedValue || namaOlahraga;\n  }\n\n  for (const alias of aliases) {\n    if (!alias) continue;\n\n    if (normalizedUser === alias) {\n      score += 180;\n      matchedBy = matchedBy || 'alias_exact';\n      matchedValue = matchedValue || alias;\n    }\n\n    if (normalizedUser.includes(alias)) {\n      score += 100;\n      matchedBy = matchedBy || 'alias_in_text';\n      matchedValue = matchedValue || alias;\n    }\n\n    if (alias.includes(normalizedUser) && normalizedUser.length >= 4) {\n      score += 50;\n      matchedBy = matchedBy || 'alias_partial';\n      matchedValue = matchedValue || alias;\n    }\n  }\n\n  const nameTokens = normalizedName.split(' ').filter(Boolean);\n  const matchedTokens = nameTokens.filter(token => userTokens.includes(token));\n  if (matchedTokens.length > 0) {\n    score += matchedTokens.length * 15;\n    matchedBy = matchedBy || 'token_match';\n    matchedValue = matchedValue || namaOlahraga;\n  }\n\n  if (nameTokens.length > 1 && matchedTokens.length === nameTokens.length) {\n    score += 40;\n  }\n\n  for (const alias of aliases) {\n    const aliasTokens = alias.split(' ').filter(Boolean);\n    const aliasMatchedTokens = aliasTokens.filter(token => userTokens.includes(token));\n    if (aliasMatchedTokens.length > 0) {\n      score += aliasMatchedTokens.length * 10;\n      matchedBy = matchedBy || 'alias_token_match';\n      matchedValue = matchedValue || alias;\n    }\n  }\n\n  return { row, score, matchedBy, matchedValue };\n}\n\nconst scoredMatches = olahragaRows\n  .map(scoreMatch)\n  .filter(entry => entry.score > 0)\n  .sort((a, b) => {\n    if (b.score !== a.score) return b.score - a.score;\n    const aNameLen = String(a.row.nama_olahraga || '').length;\n    const bNameLen = String(b.row.nama_olahraga || '').length;\n    return bNameLen - aNameLen;\n  });\n\nconst bestMatch = scoredMatches[0] || null;\nconst classDetailIntent =\n  !!msg.is_class_detail_intent ||\n  hasClassDetailCue(userText) ||\n  scoredMatches.length > 0;\n\nconst classDetailFound = !!(bestMatch && bestMatch.score >= 40);\n\nconst payload = classDetailFound\n  ? {\n      id: bestMatch.row.id || null,\n      nama_olahraga: String(bestMatch.row.nama_olahraga || '').trim(),\n      alias: String(bestMatch.row.alias || '').trim(),\n      deskripsi_singkat: String(bestMatch.row.deskripsi_singkat || '').trim(),\n      manfaat: String(bestMatch.row.manfaat || '').trim(),\n      cocok_untuk: String(bestMatch.row.cocok_untuk || '').trim(),\n      level: String(bestMatch.row.level || '').trim(),\n      fokus_latihan: String(bestMatch.row.fokus_latihan || '').trim(),\n      status: String(bestMatch.row.status || '').trim()\n    }\n  : null;\n\nlet classDetailResponseMode = 'none';\nif (classDetailIntent && classDetailFound) classDetailResponseMode = 'class_detail_found';\nelse if (classDetailIntent && !classDetailFound) classDetailResponseMode = 'class_detail_not_found';\n\nreturn {\n  json: {\n    ...refData,\n    raw_user_message: rawUserMessage,\n    class_detail_intent: classDetailIntent,\n    class_detail_found: classDetailFound,\n    matched_class_id: payload ? payload.id : null,\n    matched_class_name: payload ? payload.nama_olahraga : null,\n    matched_class_alias: payload ? payload.alias : null,\n    matched_class_by: classDetailFound ? bestMatch.matchedBy : null,\n    matched_class_score: classDetailFound ? bestMatch.score : 0,\n    class_detail_payload: payload,\n    class_detail_response_mode: classDetailResponseMode,\n    class_detail_candidates: scoredMatches.slice(0, 3).map(entry => ({\n      id: entry.row.id || null,\n      nama_olahraga: String(entry.row.nama_olahraga || '').trim(),\n      alias: String(entry.row.alias || '').trim(),\n      score: entry.score\n    }))\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2224,
+        24192
+      ],
+      "id": "3caff29d-4f28-4934-bbf3-8a6620b591fc",
+      "name": "Resolve Class Detail"
+    },
+    {
+      "parameters": {
+        "jsCode": "const refData = $('Collect Reference Data (Sequential)').first().json || {};\nconst classDetail = $('Resolve Class Detail').first().json || {};\nconst msg =\n  $('Sensitive Condition').first().json ||\n  $('Consultation Need Detector').first().json ||\n  $('Detect Acknowledgement').first().json ||\n  $('Classify Conversation Micro Intent').first().json ||\n  $('Normalize Incoming Message').first().json ||\n  {};\n\nconst userMessage = String(\n  msg.raw_user_message ||\n  msg.userMessage ||\n  refData.userMessage ||\n  ''\n).trim();\n\nconst answerMode = String(refData.answerMode || 'GENERAL');\nconst classPayload = classDetail.class_detail_payload || null;\nconst classDetailFound = !!classDetail.class_detail_found;\n\nlet primary_fact_type = 'general';\nlet primary_fact_payload = null;\nlet answer_strategy = 'general_data_reply';\n\nif (classDetailFound) {\n  primary_fact_type = 'class_detail';\n  primary_fact_payload = classPayload;\n  answer_strategy = 'class_detail_priority';\n} else if (answerMode === 'LOCATION' && refData.locationText) {\n  primary_fact_type = 'location';\n  primary_fact_payload = { locationText: refData.locationText };\n  answer_strategy = 'direct_location_reply';\n} else if (answerMode === 'ADMIN_INFO' && refData.adminText) {\n  primary_fact_type = 'admin';\n  primary_fact_payload = { adminText: refData.adminText };\n  answer_strategy = 'direct_admin_reply';\n} else if (answerMode === 'SOCIAL_MEDIA' && refData.socialText) {\n  primary_fact_type = 'social_media';\n  primary_fact_payload = { socialText: refData.socialText };\n  answer_strategy = 'direct_social_reply';\n} else if (\n  ['PRICE_GENERAL_CLARIFY', 'PRICE_SPECIFIC', 'PRICE_OBJECTION'].includes(answerMode) &&\n  refData.priceRangeText\n) {\n  primary_fact_type = 'price';\n  primary_fact_payload = { priceRangeText: refData.priceRangeText };\n  answer_strategy = 'price_data_reply';\n}\n\nconst fallback_fact_payload = {\n  locationText: refData.locationText || '',\n  adminText: refData.adminText || '',\n  socialText: refData.socialText || '',\n  priceRangeText: refData.priceRangeText || ''\n};\n\nconst answer_facts = {\n  userMessage,\n  answerMode,\n  class_detail: classPayload,\n  class_detail_found: classDetailFound,\n  locationText: refData.locationText || '',\n  adminText: refData.adminText || '',\n  socialText: refData.socialText || '',\n  priceRangeText: refData.priceRangeText || '',\n  hasSpecificDay: !!refData.hasSpecificDay,\n  asksOnlyGeneralPrice: !!refData.asksOnlyGeneralPrice,\n  asksClassAndPrice: !!refData.asksClassAndPrice\n};\n\nreturn {\n  json: {\n    ...refData,\n    answer_facts,\n    primary_fact_type,\n    primary_fact_payload,\n    fallback_fact_payload,\n    answer_strategy\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1776,
+        24192
+      ],
+      "id": "63d182ae-c556-4d1f-b19b-0f3d7a6c5587",
+      "name": "Assemble Answer Facts"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Kamu adalah editor gaya bahasa untuk admin WhatsApp StepUp Ladies Gym.\n\nTugasmu hanya merapikan balasan agar terdengar lebih natural, hangat, luwes, dan seperti admin manusia di WhatsApp.\n\nPENTING:\n- Jangan ubah fakta.\n- Jangan tambah fakta baru.\n- Jangan ubah nama kelas, harga, alamat, jadwal, nomor admin, coach, promo, atau link.\n- Jangan menghilangkan informasi penting.\n- Jangan membuat jawaban lebih panjang dari yang perlu.\n- Jangan terdengar seperti customer service robot, brosur, atau template kaku.\n\nTujuan edit:\n- buat kalimat lebih enak dibaca\n- buat lebih natural seperti chat admin WA\n- hilangkan pengulangan yang aneh\n- hilangkan CTA yang monoton atau terlalu robotik\n- balasan “oke kak / siap kak / terima kasih kak” dibuat lebih fleksibel\n- jika ada sapaan, gunakan maksimal satu sapaan saja\n- jangan pernah membuat sapaan ganda seperti:\n  \"Siang kak, selamat siang\"\n  \"Pagi kak, selamat pagi\"\n  \"Hai kak, selamat siang\"\n\nAturan gaya:\n- gunakan bahasa Indonesia yang natural\n- sopan, hangat, singkat\n- plain text saja\n- jangan pakai markdown\n- jangan pakai bullet kecuali memang isinya daftar\n- jangan pakai emoji berlebihan\n- kalau balasan sudah bagus, cukup perbaiki sedikit saja\n\nKonteks:\n- Mode jawaban: {{ $('Build Human WhatsApp Context').first().json.answerMode }}\n- Tipe fakta utama: {{ $('Build Human WhatsApp Context').first().json.primaryFactType }}\n- Pesan user: {{ $('Build Human WhatsApp Context').first().json.userMessage }}\n\nBalasan draft yang harus dirapikan:\n{{ $('Parse LLM Result').first().json.replyText }}\n\nOutput:\nTulis hanya balasan final yang sudah dirapikan. Jangan beri penjelasan."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        -1424,
+        24512
+      ],
+      "id": "6916c5af-3c83-4775-b13e-dffaed62d0ba",
+      "name": "Conversation Stylist AI",
+      "credentials": {
+        "openAiApi": {
+          "id": "DiHgpfyCb1bIvgSD",
+          "name": "OpenAI account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const stylist = $input.first().json || {};\nconst parsed = $('Parse LLM Result').first().json || {};\nconst ctx = $('Build Human WhatsApp Context').first().json || {};\n\nconst styledReplyRaw = String(\n  stylist.output?.[0]?.content?.[0]?.text ||\n  stylist.text ||\n  stylist.message?.content ||\n  stylist.response?.text ||\n  stylist.replyText ||\n  ''\n).trim();\n\nconst parsedReply = String(parsed.replyText || '').trim();\nconst answerMode = String(ctx.answerMode || 'GENERAL');\nconst userMessage = String(ctx.userMessage || '').trim();\n\nfunction cleanText(text) {\n  return String(text || '')\n    .replace(/\\[INTENT:JOIN\\]/g, '')\n    .replace(/[ \\t]+$/gm, '')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n}\n\nfunction hasDoubleGreeting(text) {\n  const t = String(text || '').toLowerCase().trim();\n  return (\n    /^(pagi kak|siang kak|sore kak|malam kak),?\\s*selamat (pagi|siang|sore|malam)/i.test(t) ||\n    /^(hai kak|halo kak),?\\s*selamat (pagi|siang|sore|malam)/i.test(t) ||\n    /^(selamat (pagi|siang|sore|malam)),?\\s*(pagi kak|siang kak|sore kak|malam kak)/i.test(t)\n  );\n}\n\nfunction hasRobotCta(text) {\n  return /kami\\s+siap\\s+membantu|jangan\\s+ragu\\s+untuk\\s+(tanya|menghubungi)|feel\\s+free\\s+to|silakan\\s+tanya/i.test(String(text || '').toLowerCase());\n}\n\nfunction hasHallucinationSignals(text, mode) {\n  const t = String(text || '').toLowerCase();\n  if (!t) return true;\n  if (/\\bzumba\\b/i.test(t)) return true;\n  if (/\\b(database|prompt|assistant|language model|chatgpt|openai)\\b/i.test(t)) return true;\n  if (/\\[alamat lengkap gym\\]/i.test(t)) return true;\n  if (mode !== 'LOCATION' && /\\b(jl\\.|jalan\\s+[a-z]|rt\\s*\\/\\s*rw|kelurahan|kecamatan|blok\\s+[a-z])\\b/i.test(t)) return true;\n  return false;\n}\n\nfunction isTooDifferentFromParsed(baseText, styledText) {\n  const base = cleanText(baseText).toLowerCase();\n  const styled = cleanText(styledText).toLowerCase();\n\n  if (!base || !styled) return false;\n\n  const baseWords = base.split(/\\s+/).filter(Boolean);\n  const styledWords = styled.split(/\\s+/).filter(Boolean);\n\n  if (styledWords.length > baseWords.length * 2.2) return true;\n  if (styledWords.length < Math.max(3, Math.floor(baseWords.length * 0.35))) return true;\n\n  return false;\n}\n\nlet finalReply = cleanText(styledReplyRaw);\nlet replyStatus = 'styled_ok';\nlet usedFallback = false;\nlet fallbackReason = '';\n\nif (!finalReply) {\n  finalReply = parsedReply;\n  replyStatus = 'fallback_to_parsed';\n  usedFallback = true;\n  fallbackReason = 'empty_stylist_output';\n}\n\nif (!usedFallback && hasDoubleGreeting(finalReply)) {\n  finalReply = parsedReply;\n  replyStatus = 'fallback_to_parsed';\n  usedFallback = true;\n  fallbackReason = 'double_greeting_detected';\n}\n\nif (!usedFallback && hasHallucinationSignals(finalReply, answerMode)) {\n  finalReply = parsedReply;\n  replyStatus = 'fallback_to_parsed';\n  usedFallback = true;\n  fallbackReason = 'hallucination_signal_detected';\n}\n\nif (!usedFallback && isTooDifferentFromParsed(parsedReply, finalReply)) {\n  finalReply = parsedReply;\n  replyStatus = 'fallback_to_parsed';\n  usedFallback = true;\n  fallbackReason = 'styled_reply_too_different';\n}\n\nif (!usedFallback && hasRobotCta(finalReply) && !hasRobotCta(parsedReply)) {\n  finalReply = parsedReply;\n  replyStatus = 'fallback_to_parsed';\n  usedFallback = true;\n  fallbackReason = 'robotic_cta_reintroduced';\n}\n\nfinalReply = cleanText(finalReply);\n\nreturn {\n  json: {\n    ...parsed,\n    final_reply: finalReply,\n    replyText: finalReply,\n    reply_status: replyStatus,\n    used_fallback: usedFallback,\n    fallback_reason: fallbackReason,\n    stylist_reply_raw: styledReplyRaw,\n    answerMode,\n    userMessage\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -960,
+        24512
+      ],
+      "id": "f904b4db-1fdc-4f4e-b6fc-22f078df8adb",
+      "name": "Final Reply Policy Check"
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg =\n  $('Sensitive Condition').first().json ||\n  $('Consultation Need Detector').first().json ||\n  $('Detect Acknowledgement').first().json ||\n  $('Classify Conversation Micro Intent').first().json ||\n  $('Normalize Incoming Message').first().json ||\n  {};\n\nconst rawUserMessage = String(\n  msg.raw_user_message ||\n  msg.userMessage ||\n  ''\n).trim();\n\nconst userText = rawUserMessage.toLowerCase();\n\nconst needsConsultation = !!msg.needs_consultation;\nconst consultationTopic = String(msg.consultation_topic || '');\nconst consultationPriority = String(msg.consultation_priority || 'low');\n\nconst hasSensitiveCondition = !!msg.has_sensitive_condition;\nconst riskFlags = Array.isArray(msg.risk_flags) ? msg.risk_flags : [];\nconst safeModeRequired = !!msg.safe_mode_required;\nconst shouldBlockDirectRecommendation = !!msg.should_block_direct_recommendation;\n\nconst isAcknowledgement = !!msg.is_acknowledgement;\nconst isGreetingOnly = !!msg.is_greeting_only;\nconst isClassDetailIntent = !!msg.is_class_detail_intent;\nconst isLocationIntent = !!msg.is_location_intent;\nconst isAdminIntent = !!msg.is_admin_intent;\nconst isJoinIntent = !!msg.is_join_intent;\nconst microIntent = String(msg.micro_intent || 'general_info');\n\nlet canRecommendDirectly = true;\nlet recommendationMode = 'direct_answer_allowed';\nlet mustHandoffAdmin = false;\nlet mustHandoffCoach = false;\nlet consultationResponseType = 'normal_info';\nlet eligibilityReason = 'standard_info_safe';\n\nif (isGreetingOnly || isAcknowledgement) {\n  canRecommendDirectly = true;\n  recommendationMode = 'light_response_only';\n  consultationResponseType = 'light_response';\n  eligibilityReason = 'greeting_or_acknowledgement';\n} else if (isLocationIntent || isAdminIntent || isClassDetailIntent) {\n  canRecommendDirectly = true;\n  recommendationMode = 'direct_answer_allowed';\n  consultationResponseType = 'direct_reference_answer';\n  eligibilityReason = 'reference_question_safe';\n} else if (isJoinIntent && !hasSensitiveCondition) {\n  canRecommendDirectly = true;\n  recommendationMode = 'direct_answer_allowed';\n  consultationResponseType = 'join_guidance';\n  eligibilityReason = 'join_intent_safe';\n} else if (shouldBlockDirectRecommendation) {\n  canRecommendDirectly = false;\n  recommendationMode = 'handoff_required';\n  mustHandoffAdmin = true;\n  mustHandoffCoach = true;\n  consultationResponseType = 'empathetic_handoff';\n  eligibilityReason = 'sensitive_condition_blocks_recommendation';\n} else if (hasSensitiveCondition || safeModeRequired) {\n  canRecommendDirectly = false;\n  recommendationMode = 'general_guidance_only';\n  mustHandoffAdmin = true;\n  consultationResponseType = 'careful_guidance';\n  eligibilityReason = 'safe_mode_required';\n} else if (needsConsultation && consultationPriority === 'high') {\n  canRecommendDirectly = false;\n  recommendationMode = 'general_guidance_only';\n  mustHandoffAdmin = true;\n  consultationResponseType = 'consultative_guidance';\n  eligibilityReason = 'high_priority_consultation';\n} else if (needsConsultation && consultationPriority === 'medium') {\n  canRecommendDirectly = false;\n  recommendationMode = 'general_guidance_only';\n  consultationResponseType = 'consultative_guidance';\n  eligibilityReason = 'medium_priority_consultation';\n} else if (needsConsultation) {\n  canRecommendDirectly = false;\n  recommendationMode = 'general_guidance_only';\n  consultationResponseType = 'light_consultative_guidance';\n  eligibilityReason = 'consultation_detected';\n}\n\nif (\n  consultationTopic === 'nutrition_product' &&\n  (hasSensitiveCondition || riskFlags.includes('postpartum') || riskFlags.includes('c_section'))\n) {\n  canRecommendDirectly = false;\n  recommendationMode = 'handoff_required';\n  mustHandoffAdmin = true;\n  mustHandoffCoach = true;\n  consultationResponseType = 'nutrition_sensitive_handoff';\n  eligibilityReason = 'nutrition_request_with_sensitive_condition';\n}\n\nif (\n  consultationTopic === 'program_selection' &&\n  needsConsultation &&\n  !hasSensitiveCondition &&\n  consultationPriority !== 'high'\n) {\n  canRecommendDirectly = false;\n  recommendationMode = 'general_guidance_only';\n  consultationResponseType = 'program_selection_guidance';\n  eligibilityReason = 'program_selection_needs_guidance';\n}\n\nreturn {\n  json: {\n    ...msg,\n    can_recommend_directly: canRecommendDirectly,\n    recommendation_mode: recommendationMode,\n    must_handoff_admin: mustHandoffAdmin,\n    must_handoff_coach: mustHandoffCoach,\n    consultation_response_type: consultationResponseType,\n    eligibility_reason: eligibilityReason\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        22560
+      ],
+      "id": "42912ab6-f957-4e30-a0d5-8def874f3ab7",
+      "name": "Recommendation Eligibility Checker"
+    },
+    {
+      "parameters": {
+        "jsCode": "const assembled = $('Assemble Answer Facts').first().json || {};\nconst eligibility = $('Recommendation Eligibility Checker').first().json || {};\nconst consult = $('Consultation Need Detector').first().json || {};\nconst sensitive = $('Sensitive Condition').first().json || {};\nconst incoming = $('Normalize Incoming Message').first().json || {};\n\nconst userMessage = String(\n  eligibility.raw_user_message ||\n  consult.raw_user_message ||\n  incoming.userMessage ||\n  assembled.answer_facts?.userMessage ||\n  ''\n).trim();\n\nconst recommendationMode = String(eligibility.recommendation_mode || 'direct_answer_allowed');\nconst consultationResponseType = String(eligibility.consultation_response_type || 'normal_info');\nconst eligibilityReason = String(eligibility.eligibility_reason || '');\nconst mustHandoffAdmin = !!eligibility.must_handoff_admin;\nconst mustHandoffCoach = !!eligibility.must_handoff_coach;\nconst canRecommendDirectly = !!eligibility.can_recommend_directly;\n\nconst needsConsultation = !!consult.needs_consultation;\nconst consultationTopic = String(consult.consultation_topic || '');\nconst consultationPriority = String(consult.consultation_priority || 'low');\n\nconst hasSensitiveCondition = !!sensitive.has_sensitive_condition;\nconst riskFlags = Array.isArray(sensitive.risk_flags) ? sensitive.risk_flags : [];\n\nconst answerFacts = assembled.answer_facts || {};\nconst primaryFactType = String(assembled.primary_fact_type || 'general');\nconst primaryFactPayload = assembled.primary_fact_payload || null;\nconst fallbackFactPayload = assembled.fallback_fact_payload || {};\n\nlet shouldUseConsultativeStyle = false;\nlet consultativeReplyMode = 'normal_info';\nlet handoffReason = '';\nlet safeGuidanceText = '';\nlet adminHandoffText = '';\nlet consultativeFacts = {};\n\nif (\n  needsConsultation ||\n  hasSensitiveCondition ||\n  recommendationMode === 'general_guidance_only' ||\n  recommendationMode === 'handoff_required'\n) {\n  shouldUseConsultativeStyle = true;\n}\n\nif (recommendationMode === 'handoff_required') {\n  consultativeReplyMode = 'empathetic_handoff';\n  handoffReason = eligibilityReason || 'sensitive_case_requires_handoff';\n} else if (recommendationMode === 'general_guidance_only') {\n  consultativeReplyMode = 'careful_guidance';\n  handoffReason = eligibilityReason || 'consultative_case_needs_careful_guidance';\n} else if (!canRecommendDirectly && needsConsultation) {\n  consultativeReplyMode = 'consultative_guidance';\n  handoffReason = eligibilityReason || 'consultative_support_needed';\n}\n\nif (consultativeReplyMode === 'empathetic_handoff') {\n  safeGuidanceText =\n    'Balas dengan empati, validasi kondisi user, jangan langsung arahkan ke paket atau pricelist, dan jelaskan bahwa kondisi seperti ini lebih aman dibantu melalui konsultasi admin atau coach terlebih dahulu.';\n} else if (consultativeReplyMode === 'careful_guidance') {\n  safeGuidanceText =\n    'Balas dengan empati dan arahan umum yang aman. Jangan memberi rekomendasi agresif atau terlalu spesifik. Jika perlu, arahkan ke admin untuk konsultasi lanjutan.';\n} else if (consultativeReplyMode === 'consultative_guidance') {\n  safeGuidanceText =\n    'Balas dengan gaya konsultatif: pahami kebutuhan user dulu, lalu beri arahan umum yang relevan tanpa terlalu cepat menjual paket.';\n}\n\nif (mustHandoffAdmin || mustHandoffCoach) {\n  adminHandoffText =\n    'Jika data atau kondisi user membutuhkan pendampingan lebih lanjut, arahkan dengan hangat ke admin atau coach untuk konsultasi lanjutan.';\n}\n\nconsultativeFacts = {\n  userMessage,\n  needsConsultation,\n  consultationTopic,\n  consultationPriority,\n  hasSensitiveCondition,\n  riskFlags,\n  recommendationMode,\n  consultationResponseType,\n  mustHandoffAdmin,\n  mustHandoffCoach,\n  primaryFactType,\n  primaryFactPayload,\n  fallbackFactPayload,\n  safeGuidanceText,\n  adminHandoffText\n};\n\nreturn {\n  json: {\n    ...assembled,\n    should_use_consultative_style: shouldUseConsultativeStyle,\n    consultative_reply_mode: consultativeReplyMode,\n    consultative_facts: consultativeFacts,\n    safe_guidance_text: safeGuidanceText,\n    admin_handoff_text: adminHandoffText,\n    handoff_reason: handoffReason\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1360,
+        24192
+      ],
+      "id": "2ff1c8eb-d590-4fdd-a93b-f2672c81c69c",
+      "name": "Consultative Reply Builder"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receive From Gateway": {
+      "main": [
+        [
+          {
+            "node": "Normalize Incoming Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Incoming Message": {
+      "main": [
+        [
+          {
+            "node": "Filter Private Chat Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Private Chat Only": {
+      "main": [
+        [
+          {
+            "node": "Classify Conversation Micro Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Existing Lead": {
+      "main": [
+        [
+          {
+            "node": "Check Lead State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Lead State": {
+      "main": [
+        [
+          {
+            "node": "Guard: Drop If PROCESSING",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Drop If PROCESSING": {
+      "main": [
+        [
+          {
+            "node": "Route By State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Join Form Data": {
+      "main": [
+        [
+          {
+            "node": "Join Form Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Lead": {
+      "main": [
+        [
+          {
+            "node": "Lock Session: Set PROCESSING",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lock Session: Set PROCESSING": {
+      "main": [
+        [
+          {
+            "node": "Insert User Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert User Message": {
+      "main": [
+        [
+          {
+            "node": "Send Typing Indicator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Typing Indicator": {
+      "main": [
+        [
+          {
+            "node": "Fetch Chat History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Chat History": {
+      "main": [
+        [
+          {
+            "node": "Format History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format History": {
+      "main": [
+        [
+          {
+            "node": "Fetch Sheet Harga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Sheet Harga": {
+      "main": [
+        [
+          {
+            "node": "Fetch Sheet Jadwal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Sheet Jadwal": {
+      "main": [
+        [
+          {
+            "node": "Fetch Sheet Coach",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Sheet Coach": {
+      "main": [
+        [
+          {
+            "node": "Fetch Sheet Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Sheet Event": {
+      "main": [
+        [
+          {
+            "node": "Fetch Sheet Promo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Sheet Promo": {
+      "main": [
+        [
+          {
+            "node": "Fetch Sheet Olahraga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Knowledge Base": {
+      "main": [
+        [
+          {
+            "node": "Filter KB By Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter KB By Intent": {
+      "main": [
+        [
+          {
+            "node": "Collect Reference Data (Sequential)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Reference Data (Sequential)": {
+      "main": [
+        [
+          {
+            "node": "Resolve Class Detail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Human WhatsApp Context": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Human WhatsApp Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Reply": {
+      "main": [
+        [
+          {
+            "node": "Route Join Intent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Typing Before Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Join Intent": {
+      "main": [
+        [
+          {
+            "node": "Gate Join Form Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send User Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dynamic Join Form (Spintax)": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Join Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Join Form": {
+      "main": [
+        [
+          {
+            "node": "Set State AWAITING FORM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send User Reply": {
+      "main": [
+        [
+          {
+            "node": "Unlock Session: Set IDLE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unlock Session: Set IDLE": {
+      "main": [
+        [
+          {
+            "node": "Update AI Session On Unlock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Join Form Valid?": {
+      "main": [
+        [
+          {
+            "node": "Insert Join Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sheet Save Join",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Join Form Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Admin New Lead": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin New Lead",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sheet Save New Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Admin Rechat": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Rechat 90d",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sheet Save Rechat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Admin Join Lead": {
+      "main": [
+        [
+          {
+            "node": "Notify Group Join Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate Join Form Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Build Dynamic Join Form (Spintax)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Join Form": {
+      "main": [
+        [
+          {
+            "node": "Send Join Form",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Typing Before Join Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Human WhatsApp Reply": {
+      "main": [
+        [
+          {
+            "node": "Build Humanizer Final Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Result": {
+      "main": [
+        [
+          {
+            "node": "Conversation Stylist AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route By State": {
+      "main": [
+        [
+          {
+            "node": "Gate Awaiting Form Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Admin New Lead",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lock Session: Set PROCESSING",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Wait Before Admin Rechat",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lock Session: Set PROCESSING",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Join Request": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Admin Join Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Group Join Lead": {
+      "main": [
+        [
+          {
+            "node": "Send Join Submission Thanks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Join Submission Thanks": {
+      "main": [
+        [
+          {
+            "node": "Update Lead Status Join",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Lead Status Join": {
+      "main": [
+        [
+          {
+            "node": "Unlock Session: Set IDLE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Final Humanizer": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate Awaiting Form Message": {
+      "main": [
+        [
+          {
+            "node": "Is Actual Join Form?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Actual Join Form?": {
+      "main": [
+        [
+          {
+            "node": "Parse Join Form Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lock Session: Set PROCESSING",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Humanizer Final Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Final Humanizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Sheet Olahraga": {
+      "main": [
+        [
+          {
+            "node": "Fetch Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Conversation Micro Intent": {
+      "main": [
+        [
+          {
+            "node": "Detect Acknowledgement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Acknowledgement": {
+      "main": [
+        [
+          {
+            "node": "Consultation Need Detector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultation Need Detector": {
+      "main": [
+        [
+          {
+            "node": "Sensitive Condition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sensitive Condition": {
+      "main": [
+        [
+          {
+            "node": "Recommendation Eligibility Checker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Class Detail": {
+      "main": [
+        [
+          {
+            "node": "Assemble Answer Facts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Answer Facts": {
+      "main": [
+        [
+          {
+            "node": "Consultative Reply Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Stylist AI": {
+      "main": [
+        [
+          {
+            "node": "Final Reply Policy Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Reply Policy Check": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Reply",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Insert AI Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recommendation Eligibility Checker": {
+      "main": [
+        [
+          {
+            "node": "Find Existing Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultative Reply Builder": {
+      "main": [
+        [
+          {
+            "node": "Build Human WhatsApp Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "589a6c70-fb42-479b-863d-61e526a576f3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "be19658eb5898d2170a5b92511d5d54204f8efae614cb5f9df69832615d39c38"
+  },
+  "id": "gu81StMrrFiRbEre",
+  "tags": [
+    {
+      "updatedAt": "2026-05-21T08:28:47.468Z",
+      "createdAt": "2026-05-21T08:28:47.468Z",
+      "id": "bMClPh4ry8iJQKXg",
+      "name": "STEP UP"
+    }
+  ]
+}
