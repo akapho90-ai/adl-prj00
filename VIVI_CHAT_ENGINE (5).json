@@ -1,0 +1,1775 @@
+{
+  "name": "VIVI_CHAT_ENGINE",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        7152,
+        2000
+      ],
+      "id": "cf9c1fb0-8964-41f3-aecf-2f83fb1554c4",
+      "name": "Vivi_Receive_From_Gateway"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nreturn items.map((item) => {\n  const src = item.json ?? {};\n  const content = String(src.content ?? src.text ?? '').trim();\n  const timestamp = src.timestamp ?? new Date().toISOString();\n  const whatsappNumber = String(src.whatsapp_number ?? src.sender_id ?? '').replace(/\\D/g, '');\n  const chatId = String(src.chat_id ?? whatsappNumber);\n  const messageType = src.message_type ?? (content ? 'text' : 'unknown');\n\n  return {\n    json: {\n      ...src,\n      client_id: src.client_id ?? null,\n      client_code: src.client_code ?? 'vivi',\n      chat_id: chatId,\n      sender_id: String(src.sender_id ?? chatId),\n      whatsapp_number: whatsappNumber,\n      message_type: messageType,\n      content,\n      clean_text: content.toLowerCase().replace(/\\s+/g, ' ').trim(),\n      timestamp,\n      direction: 'inbound',\n      session_name: src.session_name ?? ['vivi', whatsappNumber || 'unknown'].filter(Boolean).join('_'),\n      raw_payload: src.raw_payload ?? src,\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7424,
+        2000
+      ],
+      "id": "5dad14b4-c927-43e9-a83c-9e1ca46e3c02",
+      "name": "Vivi_Normalize_Message"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "vivi_leads",
+        "limit": 1,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Vivi_Normalize_Message').first().json.client_id }}"
+            },
+            {
+              "keyName": "whatsapp_number",
+              "condition": "eq",
+              "keyValue": "={{ $('Vivi_Normalize_Message').first().json.whatsapp_number }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        7744,
+        2000
+      ],
+      "id": "be3f6288-1e5e-4086-82e5-093d02ad0df6",
+      "name": "Vivi_Find_Lead",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "964039dc-5671-4ed3-a944-91c2f55b1700",
+              "leftValue": "={{ $json.needs_lead_creation }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        8464,
+        2000
+      ],
+      "id": "4072590a-16d1-4127-a2ea-e5b6dfc2f71f",
+      "name": "Vivi_Check_Lead_State"
+    },
+    {
+      "parameters": {
+        "jsCode": "const leadFromCreate = $input.first()?.json ?? {};\nconst base = $('Vivi_Guard_Processing').first().json;\nreturn [{\n  json: {\n    ...base,\n    ...(leadFromCreate.id ? { lead_id: leadFromCreate.id, lead_exists: true } : {}),\n    current_state: 'PROCESSING',\n    session_locked: true,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9488,
+        2016
+      ],
+      "id": "d95d3dca-7cc1-409a-ab0e-775908067024",
+      "name": "Vivi_Lock_Session"
+    },
+    {
+      "parameters": {
+        "tableId": "vivi_chat_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "client_id",
+              "fieldValue": "={{ $json.client_id }}"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.content }}"
+            },
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{ $json.timestamp }}"
+            },
+            {
+              "fieldId": "chat_id",
+              "fieldValue": "={{ $json.chat_id }}"
+            },
+            {
+              "fieldId": "=role",
+              "fieldValue": "user"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        7168,
+        2832
+      ],
+      "id": "9a135ce6-837f-4180-b23a-386c18a9e330",
+      "name": "Vivi_Save_User_Message",
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Vivi_Lock_Session').first().json;\nconst text = String(base.clean_text ?? '').toLowerCase();\nconst has = (...terms) => terms.some((term) => text.includes(term));\n\nlet intent = 'knowledge';\nif (has('jadwal', 'jam buka', 'jam berapa', 'schedule', 'kelas hari', 'hari ini')) intent = 'schedule';\nelse if (has('harga', 'biaya', 'price', 'tarif', 'promo')) intent = 'price';\nelse if (has('program', 'kelas', 'paket', 'latihan', 'course')) intent = 'program';\nelse if (has('daftar', 'join', 'gabung', 'registrasi', 'trial')) intent = 'join';\n\nreturn [{\n  json: {\n    ...base,\n    intent,\n    is_schedule: intent === 'schedule',\n    is_price: intent === 'price',\n    is_program: intent === 'program',\n    is_join: intent === 'join',\n    is_knowledge: intent === 'knowledge',\n    extracted_topic: text,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7456,
+        2832
+      ],
+      "id": "ad4f4411-0b2e-4a15-84a1-748613568d3e",
+      "name": "Vivi_Detect_Intent"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "schedule",
+                    "leftValue": "={{ $json.is_schedule }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "price",
+                    "leftValue": "={{ $json.is_price }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "program",
+                    "leftValue": "={{ $json.is_program }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "join",
+                    "leftValue": "={{ $json.is_join }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "knowledge",
+                    "leftValue": "={{ $json.is_knowledge }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        8192,
+        2784
+      ],
+      "id": "f4ef6e34-7a6f-42b7-bd83-58a88ecae22c",
+      "name": "Vivi_Route_Intent"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => {\n  const text = String(item.json.response_text ?? '').trim();\n  const friendly = text.startsWith('Hai')\n    ? text\n    : 'Hai kak, berikut info dari VIVI.\\\\n\\\\n' + text + '\\\\n\\\\nKalau masih ada yang mau ditanyakan, balas chat ini saja ya.';\n  return { json: { ...item.json, styled_response_text: friendly } };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10672,
+        2960
+      ],
+      "id": "72b67c31-88cc-465c-825b-7344e871bfc1",
+      "name": "Vivi_Conversation_Syle"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => {\n  const replyText = String(item.json.styled_response_text ?? item.json.response_text ?? '').trim();\n  return {\n    json: {\n      ...item.json,\n      reply_text: replyText || 'Hai kak, pesan sudah kami terima. Tim kami akan follow up secepatnya ya.',\n      current_state: 'WAITING_REPLY',\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        11408,
+        2960
+      ],
+      "id": "da5b84f5-0895-4a07-85fb-2f90e1333c33",
+      "name": "Vivi_Final_Check"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    lookup_type: 'knowledge',\n    search_terms: String(item.json.clean_text ?? '').split(' ').filter(Boolean),\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8688,
+        3488
+      ],
+      "id": "6d22bd34-c25b-49c4-806a-846f40c2e770",
+      "name": "vivi_route_knowledge"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    knowledge_keywords: item.json.search_terms.slice(0, 6),\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8960,
+        3488
+      ],
+      "id": "986986cf-e0f7-435f-a1c4-022c5576beed",
+      "name": "vivi_normalize_knowledge"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => {\n  const text = String(item.json.clean_text ?? '').toLowerCase();\n\n  const areas = [\n    { key: 'kepanjen', club: 'Step Up', aliases: ['kepanjen', 'kepanjen malang'] },\n    { key: 'tidar', club: 'Fitclub', aliases: ['tidar', 'tidar malang'] },\n    { key: 'dinoyo', club: 'Shape Up', aliases: ['dinoyo', 'dinoyo malang'] },\n  ];\n\n  const matchedArea = areas.find((area) => area.aliases.some((alias) => text.includes(alias))) ?? null;\n\n  return {\n    json: {\n      ...item.json,\n      lookup_type: 'schedule',\n      schedule_area: matchedArea?.key ?? null,\n      schedule_area_label: matchedArea ? matchedArea.key.charAt(0).toUpperCase() + matchedArea.key.slice(1) : null,\n      schedule_club_name: matchedArea?.club ?? null,\n      has_schedule_match: Boolean(matchedArea),\n      schedule_prompt_options: ['Kepanjen', 'Tidar', 'Dinoyo'],\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8672,
+        2272
+      ],
+      "id": "4c8e65b4-e9e8-4fd4-bf50-84e8caab0e6a",
+      "name": "vivi_route_schedule"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    schedule_query: [item.json.schedule_area, item.json.schedule_club_name].filter(Boolean).join(' ').trim(),\n    schedule_area_text: item.json.schedule_area_label ?? null,\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8912,
+        2272
+      ],
+      "id": "fadc7128-049b-4817-9e2a-dadeb12b9d5e",
+      "name": "vivi_normalize_schedule"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "vivi_knowledge_intents"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        9232,
+        3488
+      ],
+      "id": "1230a191-7dd8-43b0-8d24-d5c55b51a64e",
+      "name": "Vivi_Load_Knowledge",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => {\n  const text = String(item.json.clean_text ?? '');\n  const sport = ['renang', 'basket', 'futsal', 'badminton', 'gym', 'tenis'].find((name) => text.includes(name)) ?? 'umum';\n  return { json: { ...item.json, lookup_type: 'price', sport_keyword: sport } };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8672,
+        2656
+      ],
+      "id": "77b818dd-ac0c-4ae3-9086-1592691cfc5f",
+      "name": "vivi_route_price"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    has_price_match: Boolean(item.json.sport_keyword),\n    price_query: [item.json.sport_keyword, item.json.clean_text].filter(Boolean).join(' '),\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8960,
+        2656
+      ],
+      "id": "976c97e3-6207-42ab-a766-f40c7e51522c",
+      "name": "vivi_normalize_price"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1EjyGV5Hy_Ut03Jv1Se_Tzco3KqsB1qrcDjXT26njzJI",
+          "mode": "list",
+          "cachedResultName": "vivi_all_image",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1EjyGV5Hy_Ut03Jv1Se_Tzco3KqsB1qrcDjXT26njzJI/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 2110453964,
+          "mode": "list",
+          "cachedResultName": "Harga",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1EjyGV5Hy_Ut03Jv1Se_Tzco3KqsB1qrcDjXT26njzJI/edit#gid=2110453964"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        9488,
+        2640
+      ],
+      "id": "e655dabf-80cb-4b91-9e86-90595086f3ad",
+      "name": "vivi_price_Image",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OSBvzfYyt2kEPnOO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1EjyGV5Hy_Ut03Jv1Se_Tzco3KqsB1qrcDjXT26njzJI",
+          "mode": "list",
+          "cachedResultName": "vivi_all_image",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1EjyGV5Hy_Ut03Jv1Se_Tzco3KqsB1qrcDjXT26njzJI/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Jadwal",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1EjyGV5Hy_Ut03Jv1Se_Tzco3KqsB1qrcDjXT26njzJI/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        9488,
+        2256
+      ],
+      "id": "e5e0cacd-9400-4162-929c-a2f9430bc668",
+      "name": "vivi_schedule_image",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "OSBvzfYyt2kEPnOO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('vivi_normalize_schedule').first().json;\nconst rows = $input.all().map((item) => item.json);\nconst targetArea = String(base.schedule_area ?? '').toLowerCase();\n\nconst match = rows.find((row) => {\n  const lokasi = String(row.lokasi_club ?? row['lokasi_club'] ?? '').toLowerCase();\n  const club = String(row.nama_club ?? row['nama_club'] ?? '').toLowerCase();\n  return lokasi.includes(targetArea) || club.includes(targetArea);\n}) ?? null;\n\nif (!match) {\n  return [{\n    json: {\n      ...base,\n      matched_row: null,\n      schedule_media_url: null,\n      response_text: 'Maaf kak, jadwal untuk area ' + (base.schedule_area_label ?? 'tersebut') + ' belum tersedia saat ini. Kalau mau, kakak bisa pilih area lain: Kepanjen, Tidar, atau Dinoyo.',\n    },\n  }];\n}\n\nconst clubName = String(match.nama_club ?? match['nama_club'] ?? '').trim();\nconst lokasiClub = String(match.lokasi_club ?? match['lokasi_club'] ?? '').trim();\nconst jadwalUrl = String(match.jadwal_club ?? match['jadwal_club'] ?? '').trim();\nconst isUsableUrl = jadwalUrl && jadwalUrl.toLowerCase() !== 'none';\nconst areaLabel = base.schedule_area_label ?? lokasiClub.split('-')[0].trim() ?? 'area tersebut';\n\nconst responseText = isUsableUrl\n  ? 'Baik kak, untuk area ' + areaLabel + ' jadwalnya sebagai berikut ya kak.\\n\\nClub: ' + clubName + '\\nLokasi: ' + lokasiClub + '\\nJadwal: ' + jadwalUrl\n  : 'Baik kak, untuk area ' + areaLabel + ' saat ini datanya ada di club ' + clubName + ', tetapi link gambar jadwalnya belum tersedia ya kak.';\n\nreturn [{\n  json: {\n    ...base,\n    matched_row: match,\n    schedule_media_url: isUsableUrl ? jadwalUrl : null,\n    schedule_club_name: clubName,\n    schedule_location: lokasiClub,\n    response_text: responseText,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9760,
+        2256
+      ],
+      "id": "9cdfd2a2-7409-47ae-86e2-d52edfeecf5a",
+      "name": "vivi_schedule_select"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('vivi_normalize_price').first().json;\nconst rows = $input.all().map((item) => item.json);\nconst match = rows.find((row) => JSON.stringify(row).toLowerCase().includes(base.sport_keyword)) ?? rows[0] ?? null;\nconst response = match\n  ? 'Harga yang saya temukan untuk ' + base.sport_keyword + ': ' + JSON.stringify(match)\n  : 'Maaf, data harga untuk ' + base.sport_keyword + ' belum tersedia di sheet saat ini.';\nreturn [{ json: { ...base, matched_row: match, response_text: response } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9776,
+        2640
+      ],
+      "id": "a763c1e1-6079-47fd-b393-08240708c55a",
+      "name": "vivi_price_select"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('vivi_normalize_knowledge').first().json;\nconst rows = $input.all().map((item) => item.json);\nconst keywords = (base.knowledge_keywords ?? []).map((term) => String(term).toLowerCase());\nconst match = rows.find((row) => keywords.some((term) => JSON.stringify(row).toLowerCase().includes(term))) ?? rows[0] ?? null;\nconst response = match\n  ? 'Informasi yang saya temukan: ' + JSON.stringify(match)\n  : 'Saya belum menemukan jawaban yang pas di knowledge base. Boleh jelaskan lagi pertanyaannya dengan sedikit lebih spesifik?';\nreturn [{ json: { ...base, matched_row: match, response_text: response } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9520,
+        3488
+      ],
+      "id": "7b1c967b-c35f-4919-9451-cf3536ed650a",
+      "name": "vivi_knowledge_response"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    lookup_type: 'program',\n    search_terms: String(item.json.clean_text ?? '').split(' ').filter(Boolean),\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8672,
+        3040
+      ],
+      "id": "c77b8a21-7623-42c1-b1f7-1618884da994",
+      "name": "vivi_route_program"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    program_keywords: item.json.search_terms.slice(0, 6),\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8944,
+        3040
+      ],
+      "id": "349b7e1e-fac5-4d01-884a-3a7c377ecc20",
+      "name": "vivi_normalize_program"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "vivi_knowledge_intents"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        9216,
+        3040
+      ],
+      "id": "e06922da-6a8b-4a3b-8245-ca803ac52a0a",
+      "name": "Vivi_Load_program",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('vivi_normalize_program').first().json;\nconst rows = $input.all().map((item) => item.json);\nconst keywords = (base.program_keywords ?? []).map((term) => String(term).toLowerCase());\nconst match = rows.find((row) => keywords.some((term) => JSON.stringify(row).toLowerCase().includes(term))) ?? rows[0] ?? null;\nconst response = match\n  ? 'Program yang paling relevan saya temukan seperti ini: ' + JSON.stringify(match)\n  : 'Saat ini saya belum menemukan detail program yang sesuai. Boleh kirim kata kunci yang lebih spesifik?';\nreturn [{ json: { ...base, matched_row: match, response_text: response } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9504,
+        3040
+      ],
+      "id": "d3820740-e3ac-4ae4-a051-7e98caa5916d",
+      "name": "vivi_program_response1"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    lookup_type: 'join',\n    join_interest: item.json.clean_text,\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8672,
+        3264
+      ],
+      "id": "f5369480-50bb-4512-bdaf-818f0c15085f",
+      "name": "vivi_route_join"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    response_text: 'Siap, untuk proses pendaftaran kamu bisa isi form ini dulu ya: ' + item.json.join_form_link,\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9504,
+        3264
+      ],
+      "id": "a18cda0c-2cb3-40f1-95c5-c8dbb2b31355",
+      "name": "vivi_create_join"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    needs_registration_form: true,\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8944,
+        3264
+      ],
+      "id": "62e70c71-7d09-4f99-990a-31f575daf52a",
+      "name": "vivi_join_gate"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    join_form_link: 'https://example.com/vivi-registration',\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9232,
+        3264
+      ],
+      "id": "cfde28e2-5a89-4b6f-9966-31b3cc882aef",
+      "name": "vivi_join_form"
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * (7 - 3 + 1) + 3) }}"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        11984,
+        2736
+      ],
+      "id": "b082afc4-8557-42c8-a376-5d76cdfc63c3",
+      "name": "vivi_wait_replay",
+      "webhookId": "bbaa1650-8d28-4d29-aa1f-7443d8eb7104"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({ json: { ...item.json, replay_window_finished: true } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10752,
+        3264
+      ],
+      "id": "c5505048-7c84-4cf1-85cb-f4581ca29449",
+      "name": "vivi_user_replay"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "vivi_leads",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "whatsapp_number",
+              "condition": "eq",
+              "keyValue": "={{ $json.whatsapp_number }}"
+            },
+            {
+              "keyName": "client_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.client_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "current_state",
+              "fieldValue": "IDLE"
+            },
+            {
+              "fieldId": "last_message_at",
+              "fieldValue": "={{ $json.timestamp }}"
+            },
+            {
+              "fieldId": "last_chat_date",
+              "fieldValue": "={{ $json.timestamp }}"
+            }
+          ]
+        }
+      },
+      "id": "a053c178-ead3-41df-a684-42b4a5d728f4",
+      "name": "vivi_unlock_session",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        11488,
+        3264
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    session_unlocked: true,\n  },\n}));"
+      },
+      "id": "1c1a809a-b0a4-4683-9f9a-2400c5b979f9",
+      "name": "vivi_update_session_unlock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        12032,
+        3264
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    route_reason: 'Keyword classifier selected the most likely intent.',\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7728,
+        2832
+      ],
+      "id": "fd41b905-4787-4685-8566-4f38a483fa64",
+      "name": "AI_Route_Instruction"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Vivi_Normalize_Message').first().json;\nconst rows = $input.all().map((item) => item.json).filter((row) => row && Object.keys(row).length > 0);\nconst lead = rows[0] ?? null;\nconst currentState = String(lead?.current_state ?? 'NEW').toUpperCase();\nconst isLocked = ['PROCESSING', 'WAITING_REPLY'].includes(currentState);\n\nreturn [{\n  json: {\n    ...base,\n    lead,\n    lead_exists: Boolean(lead?.id),\n    lead_id: lead?.id ?? null,\n    current_state: currentState,\n    needs_lead_creation: !lead?.id,\n    is_locked: isLocked,\n    should_notify_new_lead: !lead?.id,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8096,
+        2000
+      ],
+      "id": "15880016-653b-492f-8250-53257c2dfe9a",
+      "name": "Vivi_Guard_Processing"
+    },
+    {
+      "parameters": {
+        "tableId": "vivi_leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "client_id",
+              "fieldValue": "={{ $json.client_id }}"
+            },
+            {
+              "fieldId": "whatsapp_number",
+              "fieldValue": "={{ $json.whatsapp_number }}"
+            },
+            {
+              "fieldId": "chat_id",
+              "fieldValue": "={{ $json.chat_id }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $json.name ?? \"\" }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "lead"
+            },
+            {
+              "fieldId": "current_state",
+              "fieldValue": "NEW"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "whatsapp"
+            },
+            {
+              "fieldId": "first_message_at",
+              "fieldValue": "={{ $json.timestamp }}"
+            },
+            {
+              "fieldId": "last_message_at",
+              "fieldValue": "={{ $json.timestamp }}"
+            },
+            {
+              "fieldId": "last_chat_date",
+              "fieldValue": "={{ $json.timestamp }}"
+            },
+            {
+              "fieldId": "metadata",
+              "fieldValue": "={{ JSON.stringify({ sender_id: $json.sender_id ?? null, message_id: $json.message_id ?? null, message_type: $json.message_type ?? null, raw_payload: $json.raw_payload ?? null }) }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        8848,
+        1840
+      ],
+      "id": "c74ba7ac-8058-418c-8c03-9179f286a0ce",
+      "name": "Vivi_Create_New_Lead",
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => {\n  const responseText = String(item.json.response_text ?? '').trim();\n  const fallback = 'Terima kasih, pesanmu sudah masuk. Tim VIVI akan bantu cek dan membalas secepatnya.';\n  return {\n    json: {\n      ...item.json,\n      response_text: responseText || fallback,\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10352,
+        2960
+      ],
+      "id": "3cce42c3-c478-4627-9d31-1d15f48e7cd9",
+      "name": "Vivi_Response_Builder"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "024130da-0234-4450-9be5-d1aae6945bc5",
+              "leftValue": "={{ $json.has_schedule_match }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        9168,
+        2272
+      ],
+      "id": "debbefbc-7561-42a9-9cd5-304d5c9cde29",
+      "name": "Vivi_Error_Handler_Schedule"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('vivi_normalize_schedule').first().json;\nreturn [{\n  json: {\n    ...base,\n    response_text: 'Baik kak, untuk jadwal boleh pilih area dulu ya kak: Kepanjen, Tidar, atau Dinoyo?',\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9504,
+        2464
+      ],
+      "id": "df6b85ea-defb-4599-b3fe-d90f4ecd62be",
+      "name": "Vivi_Error_Answer Schedule"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "89ea6c50-a057-4e25-b0d4-8ecab273585c",
+              "leftValue": "={{ $json.has_price_match }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        9168,
+        2656
+      ],
+      "id": "056c8ac2-9579-4d23-8d44-0da8f73373d5",
+      "name": "Vivi_Error_Handler_price"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('vivi_normalize_price').first().json;\nreturn [{ json: { ...base, response_text: 'Boleh tulis cabang olahraga atau paket yang ingin ditanyakan harganya agar saya cek lebih tepat.' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9488,
+        2848
+      ],
+      "id": "d2dd44af-f515-43f8-a734-081eddbaa755",
+      "name": "Vivi_Error_Answer_Price"
+    },
+    {
+      "parameters": {
+        "tableId": "vivi_chat_history",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "client_id",
+              "fieldValue": "={{ $('Vivi_Lock_Session').first().json.client_id }}"
+            },
+            {
+              "fieldId": "chat_id",
+              "fieldValue": "={{ $('Vivi_Lock_Session').first().json.chat_id }}"
+            },
+            {
+              "fieldId": "role",
+              "fieldValue": "=assistant"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $('Vivi_Final_Check').first().json.reply_text }}"
+            },
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{ $('Vivi_Final_Check').first().json.timestamp }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        12768,
+        2976
+      ],
+      "id": "1ecbb704-9d25-4f97-94da-c74bf81be770",
+      "name": "Vivi_Save_Bot_Message",
+      "credentials": {
+        "supabaseApi": {
+          "id": "zTMyS8qVC78fX8ih",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => ({\n  json: {\n    ...item.json,\n    notification_skipped: true,\n    notification_note: 'Sub-workflow notification disabled in publish-safe version. Publish or rebuild notification flow separately if still needed.',\n  },\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9152,
+        1840
+      ],
+      "id": "1edeb2dd-1f87-45ff-87c7-8beacd817cd3",
+      "name": "Vivi_Notification_Disabled_Note"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-5-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Kamu adalah admin chat VIVI yang membalas WhatsApp calon member dan customer dengan gaya natural, hangat, sopan, dan terasa seperti manusia asli, bukan bot kaku.\n\nTujuanmu:\n- Membalas dengan bahasa Indonesia yang ramah, ringan, dan enak dibaca.\n- Membuat lawan bicara merasa dibantu, bukan sedang bicara dengan mesin.\n- Menyampaikan informasi dengan jelas, singkat, dan relevan.\n- Menyesuaikan nada bicara dengan konteks chat user.\n\nGaya bahasa:\n- Gunakan bahasa Indonesia santai-sopan.\n- Boleh pakai sapaan seperti “Hai kak”, “Baik kak”, “Siap kak”, secukupnya.\n- Jangan terlalu formal, jangan terlalu robotik.\n- Jangan terlalu panjang kecuali user memang butuh penjelasan detail.\n- Hindari jawaban kaku seperti template CS yang berulang.\n- Variasikan kalimat agar terasa natural.\n- Jangan memakai terlalu banyak emoji. Maksimal 1 emoji ringan bila cocok.\n- Jangan memakai tanda seru berlebihan.\n\nAturan jawaban:\n- Fokus hanya pada informasi yang memang tersedia dari konteks.\n- Jangan mengarang harga, jadwal, program, promo, atau kebijakan jika datanya tidak ada.\n- Kalau informasi kurang jelas, minta klarifikasi dengan singkat dan natural.\n- Kalau jawaban berupa data mentah, ubah menjadi kalimat yang rapi dan manusiawi.\n- Jika user hanya menyapa, balas dengan hangat dan ajak lanjut bertanya.\n- Jika user terlihat bingung, bantu arahkan dengan sederhana.\n- Jika user menanyakan hal spesifik tapi data belum ada, jawab jujur dan tawarkan bantuan lanjutan.\n\nFormat jawaban:\n- Keluarkan jawaban final saja.\n- Jangan jelaskan proses berpikir.\n- Jangan gunakan bullet kecuali memang perlu.\n- Usahakan 1–4 kalimat, padat dan natural."
+            },
+            {
+              "content": "=Buat balasan WhatsApp yang natural, ramah, dan terdengar seperti admin manusia.\n\nKonteks:\n- Nama brand: VIVI\n- Intent user: {{ $json.intent ?? '' }}\n- Pesan user asli: {{ $json.content ?? '' }}\n- Data/jawaban dasar yang sudah disiapkan sistem: {{ $json.response_text ?? '' }}\n- Chat id: {{ $json.chat_id ?? '' }}\n\nTugas:\n- Ubah data/jawaban dasar di atas menjadi balasan yang lebih natural.\n- Pertahankan makna utamanya, tapi perbaiki supaya lebih enak dibaca.\n- Jangan terdengar seperti AI atau bot.\n- Jangan menambah informasi baru yang tidak ada di konteks.\n- Jika jawaban dasar kosong, buat balasan aman berdasarkan pesan user dan minta klarifikasi dengan sopan.\n\nKeluarkan hanya teks balasan final."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        10992,
+        2960
+      ],
+      "id": "5b90388b-8900-4837-a125-9e866b1715ba",
+      "name": "Vivi_AI_Message",
+      "credentials": {
+        "openAiApi": {
+          "id": "rYSaV4mZv6uuuM7H",
+          "name": "Vivi_AI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({\n  chatId: $('Vivi_Normalize_Message').first().json.chat_id,\n  text: $('Vivi_Final_Check').first().json.reply_text,\n  session: 'vivi'\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "63053cc0-45ba-4cf6-9c3a-bdecf7203fa4",
+      "name": "Send User Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        12400,
+        2976
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://waha-c0csmicsb8j3.cgk-srikandi.sumopod.my.id/api/sendImage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Api-Key",
+              "value": "K8gcqg2p5PjOfKj1wg52n8ss8xHJGxoQ"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({\n  chatId: $('Vivi_Normalize_Message').first().json.chat_id,\n  url: $('vivi_schedule_select').first().json.schedule_media_url,\n  caption: $('Vivi_Final_Check').first().json.reply_text,\n  session: 'vivi'\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "ee107b4d-81d4-481b-be98-422882b7d223",
+      "name": "Send User Reply Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        12384,
+        2736
+      ],
+      "settings": {
+        "continueOnFail": true
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * (7 - 3 + 1) + 3) }}"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        12000,
+        2976
+      ],
+      "id": "06f23837-1fcd-48e3-80b1-6f58753872a3",
+      "name": "Wait",
+      "webhookId": "4f46789e-c661-45d9-8f1d-c23c60ccc721"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7cb70875-b711-4abf-a6b1-c4555ae79e8f",
+              "leftValue": "{{ $json.schedule_media_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        11664,
+        2960
+      ],
+      "id": "2fc92b03-4139-4811-9d10-b48f23481b22",
+      "name": "Vivi_Has_Image?"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Vivi_Receive_From_Gateway": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Normalize_Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Normalize_Message": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Find_Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Find_Lead": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Guard_Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Check_Lead_State": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Create_New_Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vivi_Lock_Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Lock_Session": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Save_User_Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Save_User_Message": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Detect_Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Detect_Intent": {
+      "main": [
+        [
+          {
+            "node": "AI_Route_Instruction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Route_Intent": {
+      "main": [
+        [
+          {
+            "node": "vivi_route_schedule",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "vivi_route_price",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "vivi_route_program",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "vivi_route_join",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "vivi_route_knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Conversation_Syle": {
+      "main": [
+        [
+          {
+            "node": "Vivi_AI_Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_route_knowledge": {
+      "main": [
+        [
+          {
+            "node": "vivi_normalize_knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_normalize_knowledge": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Load_Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_route_schedule": {
+      "main": [
+        [
+          {
+            "node": "vivi_normalize_schedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_normalize_schedule": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Error_Handler_Schedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Load_Knowledge": {
+      "main": [
+        [
+          {
+            "node": "vivi_knowledge_response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_route_price": {
+      "main": [
+        [
+          {
+            "node": "vivi_normalize_price",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_normalize_price": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Error_Handler_price",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_price_Image": {
+      "main": [
+        [
+          {
+            "node": "vivi_price_select",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_schedule_image": {
+      "main": [
+        [
+          {
+            "node": "vivi_schedule_select",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_schedule_select": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Response_Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_price_select": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Response_Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_knowledge_response": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Response_Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_route_program": {
+      "main": [
+        [
+          {
+            "node": "vivi_normalize_program",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_normalize_program": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Load_program",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Load_program": {
+      "main": [
+        [
+          {
+            "node": "vivi_program_response1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_program_response1": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Response_Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_route_join": {
+      "main": [
+        [
+          {
+            "node": "vivi_join_gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_create_join": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Response_Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_join_gate": {
+      "main": [
+        [
+          {
+            "node": "vivi_join_form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_join_form": {
+      "main": [
+        [
+          {
+            "node": "vivi_create_join",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Final_Check": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Has_Image?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_wait_replay": {
+      "main": [
+        [
+          {
+            "node": "Send User Reply",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send User Reply Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_user_replay": {
+      "main": [
+        [
+          {
+            "node": "vivi_unlock_session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vivi_unlock_session": {
+      "main": [
+        [
+          {
+            "node": "vivi_update_session_unlock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI_Route_Instruction": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Route_Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Guard_Processing": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Check_Lead_State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Create_New_Lead": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Notification_Disabled_Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Response_Builder": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Conversation_Syle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Error_Handler_Schedule": {
+      "main": [
+        [
+          {
+            "node": "vivi_schedule_image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vivi_Error_Answer Schedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Error_Handler_price": {
+      "main": [
+        [
+          {
+            "node": "vivi_price_Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vivi_Error_Answer_Price",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Save_Bot_Message": {
+      "main": [
+        [
+          {
+            "node": "vivi_user_replay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Notification_Disabled_Note": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Lock_Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_AI_Message": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Final_Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send User Reply": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Save_Bot_Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Error_Answer Schedule": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Response_Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Error_Answer_Price": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Response_Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send User Reply Image": {
+      "main": [
+        [
+          {
+            "node": "Vivi_Save_Bot_Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Send User Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vivi_Has_Image?": {
+      "main": [
+        [
+          {
+            "node": "vivi_wait_replay",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "8ace81f0-7ca8-439a-9ee0-602f15e1fc76",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "be19658eb5898d2170a5b92511d5d54204f8efae614cb5f9df69832615d39c38"
+  },
+  "nodeGroups": [],
+  "id": "U8MPm89QFpkWaUVI",
+  "tags": [
+    {
+      "updatedAt": "2026-06-13T07:14:03.340Z",
+      "createdAt": "2026-06-13T07:14:03.340Z",
+      "id": "u2q11GajXh5YrTpg",
+      "name": "VIVI"
+    }
+  ]
+}
